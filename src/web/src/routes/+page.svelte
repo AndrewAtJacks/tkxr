@@ -152,6 +152,30 @@
 		if (selectedSprint !== 'all' && selectedSprint !== 'no-sprint' && ticket.sprint !== selectedSprint) return false;
 		return true;
 	});
+
+	// Calculate sprint progress based on story points
+	$: sprintProgress = (() => {
+		// Only calculate for specific sprint selection
+		if (selectedSprint === 'all' || selectedSprint === 'no-sprint') {
+			return { totalPoints: 0, completedPoints: 0, percentage: 0, isVisible: false };
+		}
+
+		const sprintTickets = $ticketStore.filter(ticket => ticket.sprint === selectedSprint);
+		const totalPoints = sprintTickets.reduce((sum, ticket) => sum + (ticket.estimate || 0), 0);
+		const completedPoints = sprintTickets
+			.filter(ticket => ticket.status === 'done')
+			.reduce((sum, ticket) => sum + (ticket.estimate || 0), 0);
+		
+		const percentage = totalPoints > 0 ? Math.round((completedPoints / totalPoints) * 100) : 0;
+		
+		return {
+			totalPoints,
+			completedPoints,
+			percentage,
+			isVisible: true,
+			sprintName: $sprintStore.find(s => s.id === selectedSprint)?.name || 'Unknown Sprint'
+		};
+	})();
 </script>
 
 <svelte:head>
@@ -242,6 +266,30 @@
 				</div>
 			</div>
 		</div>
+
+		<!-- Sprint Progress Bar -->
+		{#if sprintProgress.isVisible}
+			<div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 p-4 shadow-sm mb-4">
+				<div class="flex items-center justify-between mb-2">
+					<h3 class="text-sm font-medium text-gray-900 dark:text-gray-100">
+						{sprintProgress.sprintName} Progress
+					</h3>
+					<span class="text-sm font-medium text-gray-600 dark:text-gray-400">
+						{sprintProgress.completedPoints} / {sprintProgress.totalPoints} points ({sprintProgress.percentage}%)
+					</span>
+				</div>
+				<div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+					<div 
+						class="h-3 rounded-full transition-all duration-500 ease-out"
+						class:bg-gray-300={sprintProgress.percentage === 0}
+						class:bg-red-500={sprintProgress.percentage > 0 && sprintProgress.percentage <= 25}
+						class:bg-yellow-500={sprintProgress.percentage > 25 && sprintProgress.percentage <= 75}
+						class:bg-green-500={sprintProgress.percentage > 75}
+						style="width: {sprintProgress.percentage}%"
+					></div>
+				</div>
+			</div>
+		{/if}
 	</header>
 
 	<!-- Stats -->

@@ -1,0 +1,13 @@
+id: tas-0oTc10Cq
+type: task
+title: Put "All Tickets" at the end, add "All Open"
+status: todo
+createdAt: 2026-02-19T20:23:19.964Z
+updatedAt: 2026-02-19T20:23:19.964Z
+description: >-
+  Currently, All Tickets is the first option (from the left) and selected by default. Put it at the end, after done.
+  Default to showing "All Open" a new category comprising all tasks and bugs not done.
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 1
