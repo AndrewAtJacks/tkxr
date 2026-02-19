@@ -19,7 +19,7 @@
 	let showCommentsModal = false;
 	let editingTicket = null;
 	let commentsTicket = null;
-	let activeTab = 'all';
+	let activeTab = 'all-open';
 	let selectedSprint = 'all'; // all, no-sprint, or sprint ID
 	let searchTerm = '';
 	let sortBy = 'updated'; // updated, created, title, priority, status
@@ -108,12 +108,13 @@
 			}
 			
 			// Tab filter
-			if (activeTab === 'all') return true;
+			if (activeTab === 'all-open') return ticket.status !== 'done';
 			if (activeTab === 'open-tasks') return ticket.type === 'task' && ticket.status !== 'done';
 			if (activeTab === 'open-bugs') return ticket.type === 'bug' && ticket.status !== 'done';
 			if (activeTab === 'todo') return ticket.status === 'todo';
 			if (activeTab === 'progress') return ticket.status === 'progress';
 			if (activeTab === 'done') return ticket.status === 'done';
+			if (activeTab === 'all') return true;
 			return true;
 		})
 		.sort((a, b) => {
@@ -355,12 +356,13 @@
 	<div class="mb-6">
 		<nav class="flex space-x-1">
 			{#each [
-				{ id: 'all', label: 'All Tickets', count: sprintFilteredTickets.length },
+				{ id: 'all-open', label: 'All Open', count: sprintFilteredTickets.filter(t => t.status !== 'done').length },
 				{ id: 'open-tasks', label: 'Open Tasks', count: sprintFilteredTickets.filter(t => t.type === 'task' && t.status !== 'done').length },
 				{ id: 'open-bugs', label: 'Open Bugs', count: sprintFilteredTickets.filter(t => t.type === 'bug' && t.status !== 'done').length },
 				{ id: 'todo', label: 'To Do', count: sprintFilteredTickets.filter(t => t.status === 'todo').length },
 				{ id: 'progress', label: 'In Progress', count: sprintFilteredTickets.filter(t => t.status === 'progress').length },
-				{ id: 'done', label: 'Done', count: sprintFilteredTickets.filter(t => t.status === 'done').length }
+				{ id: 'done', label: 'Done', count: sprintFilteredTickets.filter(t => t.status === 'done').length },
+				{ id: 'all', label: 'All Tickets', count: sprintFilteredTickets.length }
 			] as tab}
 				<button
 					class="px-4 py-2 rounded-lg text-sm font-medium transition-colors
