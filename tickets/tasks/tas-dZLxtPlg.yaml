@@ -1,9 +1,9 @@
 id: tas-dZLxtPlg
 type: task
 title: Expand large tickets
-status: todo
+status: done
 createdAt: 2026-02-19T19:45:28.931Z
-updatedAt: 2026-02-19T19:45:28.931Z
+updatedAt: 2026-02-19T20:11:02.575Z
 description: For tickets with long descriptions, allow expanding to view the entire ticket.
 assignee: use-JTYCH2se
 sprint: spr-hDifgOv0

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createEventDispatcher } from 'svelte';
+	import { createEventDispatcher, onMount, afterUpdate } from 'svelte';
 	import Bug from './icons/Bug.svelte';
 	import CheckSquare from './icons/CheckSquare.svelte';
 	import Clock from './icons/Clock.svelte';
@@ -8,12 +8,40 @@
 	import Calendar from './icons/Calendar.svelte';
 	import Edit from './icons/Edit.svelte';
 	import Trash from './icons/Trash.svelte';
+	import ChevronDown from './icons/ChevronDown.svelte';
 	import type { Ticket } from './stores';
 	import { userStore, sprintStore } from './stores';
 
 	export let ticket: Ticket;
 
 	const dispatch = createEventDispatcher();
+
+	// Expand/collapse state
+	let isExpanded = false;
+	let titleElement: HTMLElement;
+	let descriptionElement: HTMLElement;
+	let isTitleTruncated = false;
+	let isDescriptionTruncated = false;
+
+	// Check if content is truncated
+	$: showExpandButton = isExpanded || isTitleTruncated || isDescriptionTruncated;
+
+	function checkTruncation() {
+		if (titleElement) {
+			isTitleTruncated = titleElement.scrollHeight > titleElement.clientHeight;
+		}
+		if (descriptionElement) {
+			isDescriptionTruncated = descriptionElement.scrollHeight > descriptionElement.clientHeight;
+		}
+	}
+
+	function toggleExpanded() {
+		isExpanded = !isExpanded;
+	}
+
+	// Check truncation when component mounts and updates
+	onMount(checkTruncation);
+	afterUpdate(checkTruncation);
 
 	// Helper functions to get display names
 	$: getUserDisplayName = (userId: string | undefined) => {
@@ -100,7 +128,10 @@
 
 	<!-- Title & Actions -->
 	<div class="flex items-start justify-between mb-2">
-		<h3 class="font-semibold text-gray-900 dark:text-gray-100 flex-1 line-clamp-2">
+		<h3 
+			bind:this={titleElement}
+			class="font-semibold text-gray-900 dark:text-gray-100 flex-1{isExpanded ? '' : ' line-clamp-3'}"
+		>
 			{ticket.title}
 		</h3>
 		<div class="flex gap-1 ml-2">
@@ -123,9 +154,27 @@
 
 	<!-- Description -->
 	{#if ticket.description}
-		<p class="text-sm text-gray-600 dark:text-gray-300 mb-3 line-clamp-2">
+		<p 
+			bind:this={descriptionElement}
+			class="text-sm text-gray-600 dark:text-gray-300 mb-1{isExpanded ? '' : ' line-clamp-3'}"
+		>
 			{ticket.description}
 		</p>
+	{/if}
+
+	<!-- Expand/Collapse button -->
+	{#if showExpandButton}
+		<button 
+			on:click={toggleExpanded}
+			class="inline-flex items-center mb-3 text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors"
+			title={isExpanded ? 'Collapse' : 'Expand'}
+		>
+			<ChevronDown 
+				size={16} 
+				class="mr-1 transition-transform duration-200 {isExpanded ? 'rotate-180' : ''}" 
+			/>
+			{isExpanded ? 'Show less' : 'Show more'}
+		</button>
 	{/if}
 
 	<!-- Metadata -->
