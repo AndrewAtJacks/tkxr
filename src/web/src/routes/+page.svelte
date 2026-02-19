@@ -303,7 +303,11 @@
 
 	<!-- Stats -->
 	<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-		<div class="card">
+		<button 
+			class="card hover:shadow-lg transition-shadow cursor-pointer text-left w-full"
+			on:click={() => activeTab = 'all'}
+			title="View all tickets"
+		>
 			<div class="flex items-center gap-3">
 				<div class="p-2 bg-blue-100 dark:bg-blue-800 rounded-lg">
 					<CheckSquare class="w-6 h-6 text-blue-600 dark:text-blue-300" />
@@ -313,21 +317,29 @@
 					<p class="text-gray-600 dark:text-gray-400">Total Tickets</p>
 				</div>
 			</div>
-		</div>
+		</button>
 
-		<div class="card">
+		<button 
+			class="card hover:shadow-lg transition-shadow cursor-pointer text-left w-full"
+			on:click={() => activeTab = 'open-bugs'}
+			title="View open bugs"
+		>
 			<div class="flex items-center gap-3">
 				<div class="p-2 bg-red-100 dark:bg-red-800 rounded-lg">
 					<Bug class="w-6 h-6 text-red-600 dark:text-red-300" />
 				</div>
 				<div>
-					<p class="text-2xl font-bold">{sprintFilteredTickets.filter(t => t.type === 'bug').length}</p>
-					<p class="text-gray-600 dark:text-gray-400">Bugs</p>
+					<p class="text-2xl font-bold">{sprintFilteredTickets.filter(t => t.type === 'bug' && t.status !== 'done').length}</p>
+					<p class="text-gray-600 dark:text-gray-400">Open Bugs</p>
 				</div>
 			</div>
-		</div>
+		</button>
 
-		<div class="card">
+		<button 
+			class="card hover:shadow-lg transition-shadow cursor-pointer text-left w-full"
+			on:click={() => activeTab = 'progress'}
+			title="View tickets in progress"
+		>
 			<div class="flex items-center gap-3">
 				<div class="p-2 bg-yellow-100 dark:bg-yellow-800 rounded-lg">
 					<Clock class="w-6 h-6 text-yellow-600 dark:text-yellow-300" />
@@ -337,9 +349,13 @@
 					<p class="text-gray-600 dark:text-gray-400">In Progress</p>
 				</div>
 			</div>
-		</div>
+		</button>
 
-		<div class="card">
+		<button 
+			class="card hover:shadow-lg transition-shadow cursor-pointer text-left w-full"
+			on:click={() => activeTab = 'done'}
+			title="View completed tickets"
+		>
 			<div class="flex items-center gap-3">
 				<div class="p-2 bg-green-100 dark:bg-green-800 rounded-lg">
 					<Done class="w-6 h-6 text-green-600 dark:text-green-300" />
@@ -349,7 +365,7 @@
 					<p class="text-gray-600 dark:text-gray-400">Completed</p>
 				</div>
 			</div>
-		</div>
+		</button>
 	</div>
 
 	<!-- Tabs -->
