@@ -140,14 +140,14 @@
 >
 	<!-- Modal -->
 	<div 
-		class="bg-white rounded-lg shadow-xl w-full max-w-4xl mx-auto max-h-[90vh] overflow-hidden"
+		class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl mx-auto max-h-[90vh] overflow-hidden"
 		on:click|stopPropagation
 	>
 		<!-- Header -->
-		<div class="flex items-center justify-between p-6 border-b border-gray-200">
-			<h2 class="text-xl font-semibold text-gray-900">Manage Users & Sprints</h2>
+		<div class="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+			<h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100">Manage Users & Sprints</h2>
 			<button 
-				class="text-gray-400 hover:text-gray-600"
+				class="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
 				on:click={handleClose}
 			>
 				<X size={24} />
@@ -155,12 +155,12 @@
 		</div>
 
 		<!-- Tabs -->
-		<div class="border-b border-gray-200">
+		<div class="border-b border-gray-200 dark:border-gray-700">
 			<nav class="flex">
 				<button
 					class="px-6 py-3 text-sm font-medium border-b-2 transition-colors {activeTab === 'users' 
-						? 'border-blue-500 text-blue-600' 
-						: 'border-transparent text-gray-500 hover:text-gray-700'}"
+						? 'border-blue-500 text-blue-600 dark:text-blue-400' 
+						: 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}"
 					on:click={() => activeTab = 'users'}
 				>
 					<div class="flex items-center gap-2">
@@ -170,8 +170,8 @@
 				</button>
 				<button
 					class="px-6 py-3 text-sm font-medium border-b-2 transition-colors {activeTab === 'sprints' 
-						? 'border-blue-500 text-blue-600' 
-						: 'border-transparent text-gray-500 hover:text-gray-700'}"
+						? 'border-blue-500 text-blue-600 dark:text-blue-400' 
+						: 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}"
 					on:click={() => activeTab = 'sprints'}
 				>
 					<div class="flex items-center gap-2">
@@ -186,8 +186,8 @@
 		<div class="p-6 max-h-[60vh] overflow-y-auto">
 			{#if activeTab === 'users'}
 				<!-- Create User Form -->
-				<div class="mb-6 p-4 bg-gray-50 rounded-lg">
-					<h3 class="text-lg font-medium mb-4 flex items-center gap-2">
+				<div class="mb-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+					<h3 class="text-lg font-medium mb-4 flex items-center gap-2 text-gray-900 dark:text-gray-100">
 						<Plus size={16} />
 						Add New User
 					</h3>
@@ -196,19 +196,19 @@
 							type="text"
 							placeholder="Username"
 							bind:value={newUser.username}
-							class="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+							class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
 						>
 						<input
 							type="text"
 							placeholder="Display Name"
 							bind:value={newUser.displayName}
-							class="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+							class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
 						>
 						<input
 							type="email"
 							placeholder="Email (optional)"
 							bind:value={newUser.email}
-							class="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+							class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
 						>
 					</div>
 					<button
@@ -223,32 +223,32 @@
 
 				<!-- Users List -->
 				<div class="space-y-2">
-					<h3 class="text-lg font-medium mb-4">Existing Users</h3>
+					<h3 class="text-lg font-medium mb-4 text-gray-900 dark:text-gray-100">Existing Users</h3>
 					{#each $userStore as user}
-						<div class="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+						<div class="flex items-center justify-between p-3 border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg">
 							<div>
-								<div class="font-medium">{user.displayName}</div>
-								<div class="text-sm text-gray-500">@{user.username}</div>
+								<div class="font-medium text-gray-900 dark:text-gray-100">{user.displayName}</div>
+								<div class="text-sm text-gray-500 dark:text-gray-400">@{user.username}</div>
 								{#if user.email}
-									<div class="text-sm text-gray-500">{user.email}</div>
+									<div class="text-sm text-gray-500 dark:text-gray-400">{user.email}</div>
 								{/if}
 							</div>
 							<button
-								class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+								class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/50 rounded"
 								on:click={() => deleteUser(user.id)}
 							>
 								<Trash size={16} />
 							</button>
 						</div>
 					{:else}
-						<p class="text-gray-500 italic">No users found</p>
+							<p class="text-gray-500 dark:text-gray-400 italic">No users found</p>
 					{/each}
 				</div>
 
 			{:else if activeTab === 'sprints'}
 				<!-- Create Sprint Form -->
-				<div class="mb-6 p-4 bg-gray-50 rounded-lg">
-					<h3 class="text-lg font-medium mb-4 flex items-center gap-2">
+				<div class="mb-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+					<h3 class="text-lg font-medium mb-4 flex items-center gap-2 text-gray-900 dark:text-gray-100">
 						<Plus size={16} />
 						Add New Sprint
 					</h3>
@@ -257,19 +257,19 @@
 							type="text"
 							placeholder="Sprint Name"
 							bind:value={newSprint.name}
-							class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+							class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
 						>
 						<textarea
 							placeholder="Description"
 							bind:value={newSprint.description}
 							rows="3"
-							class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+							class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
 						></textarea>
 						<input
 							type="text"
 							placeholder="Sprint Goal"
 							bind:value={newSprint.goal}
-							class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+							class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
 						>
 					</div>
 					<button
@@ -284,22 +284,22 @@
 
 				<!-- Sprints List -->
 				<div class="space-y-2">
-					<h3 class="text-lg font-medium mb-4">Existing Sprints</h3>
+					<h3 class="text-lg font-medium mb-4 text-gray-900 dark:text-gray-100">Existing Sprints</h3>
 					{#each $sprintStore as sprint}
-						<div class="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+						<div class="flex items-center justify-between p-3 border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg">
 							<div class="flex-1">
-								<div class="font-medium">{sprint.name}</div>
-							<div class="text-sm text-gray-500 capitalize flex items-center gap-2">
+								<div class="font-medium text-gray-900 dark:text-gray-100">{sprint.name}</div>
+							<div class="text-sm text-gray-500 dark:text-gray-400 capitalize flex items-center gap-2">
 								Status: 
 								<span class="{sprint.status === 'completed' ? 'text-green-600' : sprint.status === 'active' ? 'text-blue-600' : 'text-yellow-600'}">
 									{sprint.status}
 								</span>
 							</div>
 							{#if sprint.description}
-								<div class="text-sm text-gray-600 mt-1">{sprint.description}</div>
+								<div class="text-sm text-gray-600 dark:text-gray-300 mt-1">{sprint.description}</div>
 							{/if}
 							{#if sprint.goal}
-								<div class="text-sm text-blue-600 mt-1">Goal: {sprint.goal}</div>
+								<div class="text-sm text-blue-600 dark:text-blue-400 mt-1">Goal: {sprint.goal}</div>
 							{/if}
 						</div>
 						<div class="flex items-center gap-2">
@@ -329,7 +329,7 @@
 								</button>
 							{/if}
 							<button
-								class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+									class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/50 rounded"
 								on:click={() => deleteSprint(sprint.id)}
 								title="Delete Sprint"
 							>
@@ -338,14 +338,14 @@
 						</div>
 						</div>
 					{:else}
-						<p class="text-gray-500 italic">No sprints found</p>
+							<p class="text-gray-500 dark:text-gray-400 italic">No sprints found</p>
 					{/each}
 				</div>
 			{/if}
 		</div>
 
 		<!-- Footer -->
-		<div class="flex justify-end p-6 border-t border-gray-200">
+		<div class="flex justify-end p-6 border-t border-gray-200 dark:border-gray-700">
 			<button
 				class="btn btn-secondary"
 				on:click={() => dispatch('close')}

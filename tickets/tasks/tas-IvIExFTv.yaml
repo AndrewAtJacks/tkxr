@@ -1,0 +1,11 @@
+id: tas-IvIExFTv
+type: task
+title: Add CLI support for comments
+status: todo
+createdAt: 2026-02-19T20:54:43.764Z
+updatedAt: 2026-02-19T20:54:43.764Z
+description: Add CLI commands to get and create comments, add them to mcp
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 1

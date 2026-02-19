@@ -1,0 +1,11 @@
+id: tas-kaW_Dd9v
+type: task
+title: Remove file bloat from expired bugs/tasks
+status: todo
+createdAt: 2026-02-19T21:00:32.700Z
+updatedAt: 2026-02-19T21:00:32.700Z
+description: When a sprint is closed, flatten the related bugs, tasks, and related comments into one doc (probably the sprint doc)
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 3

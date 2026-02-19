@@ -1,9 +1,9 @@
 id: bug-LeFQk1aa
 type: bug
 title: Modals don't support dark mode
-status: todo
+status: done
 createdAt: 2026-02-19T20:14:22.332Z
-updatedAt: 2026-02-19T20:14:22.332Z
+updatedAt: 2026-02-19T21:04:23.936Z
 description: >-
   Both ticket and manage modals do not have a dark mode, but their text is affected by it, leading to them being
   unusable in dark mode.

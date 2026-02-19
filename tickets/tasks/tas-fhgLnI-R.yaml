@@ -1,0 +1,13 @@
+id: tas-fhgLnI-R
+type: task
+title: Controls Hamburger UI
+status: todo
+createdAt: 2026-02-19T21:02:34.677Z
+updatedAt: 2026-02-19T21:02:34.677Z
+description: |-
+  Put search, filter, manage, light/dark into hamburger UI
+  Move new ticket button to floating location
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 2
