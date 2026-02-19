@@ -107,7 +107,18 @@
 					break;
 				case 'priority':
 					const priorityOrder = { low: 0, medium: 1, high: 2, critical: 3 };
-					compareValue = (priorityOrder[b.priority] || 1) - (priorityOrder[a.priority] || 1);
+					const aPriorityValue = priorityOrder[a.priority] ?? 1;
+					const bPriorityValue = priorityOrder[b.priority] ?? 1;
+					compareValue = aPriorityValue - bPriorityValue; // Low to high (ascending base)
+					
+					// If priorities are equal, sort bugs before tasks
+					if (compareValue === 0) {
+						if (a.type === 'bug' && b.type === 'task') {
+							compareValue = -1; // bug comes first
+						} else if (a.type === 'task' && b.type === 'bug') {
+							compareValue = 1; // task comes second
+						}
+					}
 					break;
 				case 'created':
 					compareValue = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();

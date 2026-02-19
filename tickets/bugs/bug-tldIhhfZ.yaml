@@ -1,9 +1,9 @@
 id: bug-tldIhhfZ
 type: bug
 title: Search/filter order issue
-status: todo
+status: done
 createdAt: 2026-02-19T18:53:40.235Z
-updatedAt: 2026-02-19T18:55:13.022Z
+updatedAt: 2026-02-19T19:10:25.069Z
 description: |-
   Priority sort is not sorting priority correctly. It should filter all tasks/bugs in the order:
   critical bug, critical task, high bug, high task, med bug, med task, low bug, low task

@@ -145,22 +145,34 @@ export async function listTickets(args: ListArgs): Promise<void> {
           return;
         }
         
-        // Group by type
-        const taskTickets = filteredTickets.filter(t => t.type === 'task');
-        const bugTickets = filteredTickets.filter(t => t.type === 'bug');
+        const sortBy = args['sort-by'] || 'updated';
         
-        if (taskTickets.length > 0) {
-          console.log(chalk.bold(`\n📋 Tasks (${taskTickets.length})`));
+        // When sorting by priority, show unified list to maintain priority order
+        if (sortBy === 'priority') {
+          console.log(chalk.bold(`\n🎯 All Tickets by Priority (${filteredTickets.length})`));
           console.log(chalk.dim('ID'.padEnd(12) + 'STATUS'.padEnd(10) + 'PRI TITLE'));
           console.log(chalk.dim('─'.repeat(60)));
-          taskTickets.forEach(ticket => console.log(formatTicket(ticket)));
-        }
-        
-        if (bugTickets.length > 0) {
-          console.log(chalk.bold(`\n🐛 Bugs (${bugTickets.length})`));
-          console.log(chalk.dim('ID'.padEnd(12) + 'STATUS'.padEnd(10) + 'PRI TITLE'));
-          console.log(chalk.dim('─'.repeat(60)));
-          bugTickets.forEach(ticket => console.log(formatTicket(ticket)));
+          filteredTickets.forEach(ticket => {
+            console.log(formatTicket(ticket));
+          });
+        } else {
+          // Group by type for other sorts
+          const taskTickets = filteredTickets.filter(t => t.type === 'task');
+          const bugTickets = filteredTickets.filter(t => t.type === 'bug');
+          
+          if (taskTickets.length > 0) {
+            console.log(chalk.bold(`\n📋 Tasks (${taskTickets.length})`));
+            console.log(chalk.dim('ID'.padEnd(12) + 'STATUS'.padEnd(10) + 'PRI TITLE'));
+            console.log(chalk.dim('─'.repeat(60)));
+            taskTickets.forEach(ticket => console.log(formatTicket(ticket)));
+          }
+          
+          if (bugTickets.length > 0) {
+            console.log(chalk.bold(`\n🐛 Bugs (${bugTickets.length})`));
+            console.log(chalk.dim('ID'.padEnd(12) + 'STATUS'.padEnd(10) + 'PRI TITLE'));
+            console.log(chalk.dim('─'.repeat(60)));
+            bugTickets.forEach(ticket => console.log(formatTicket(ticket)));
+          }
         }
         
         break;
@@ -218,7 +230,18 @@ function sortTickets(tickets: Ticket[], args: ListArgs): Ticket[] {
         const priorityOrder = { low: 0, medium: 1, high: 2, critical: 3 };
         const aPriority = a.priority || 'medium';
         const bPriority = b.priority || 'medium';
-        compareValue = (priorityOrder[bPriority as keyof typeof priorityOrder] || 1) - (priorityOrder[aPriority as keyof typeof priorityOrder] || 1);
+        const aPriorityValue = priorityOrder[aPriority as keyof typeof priorityOrder] ?? 1;
+        const bPriorityValue = priorityOrder[bPriority as keyof typeof priorityOrder] ?? 1;
+        compareValue = aPriorityValue - bPriorityValue; // Low to high (ascending base)
+        
+        // If priorities are equal, sort bugs before tasks
+        if (compareValue === 0) {
+          if (a.type === 'bug' && b.type === 'task') {
+            compareValue = -1; // bug comes first
+          } else if (a.type === 'task' && b.type === 'bug') {
+            compareValue = 1; // task comes second
+          }
+        }
         break;
       case 'created':
         compareValue = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
