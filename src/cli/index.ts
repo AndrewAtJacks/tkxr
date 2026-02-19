@@ -2,6 +2,9 @@
 
 import minimist from 'minimist';
 import chalk from 'chalk';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { createTicket } from './commands/create.js';
 import { listTickets } from './commands/list.js';
 import { showTicket } from './commands/show.js';
@@ -89,7 +92,15 @@ function showHelp() {
 }
 
 function showVersion() {
-  console.log('tkxr v0.1.0');
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const packageJsonPath = join(__dirname, '../../package.json');
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    console.log(`tkxr v${packageJson.version}`);
+  } catch (error) {
+    console.log('tkxr v1.0.0'); // Fallback version
+  }
 }
 
 async function main() {

@@ -1,9 +1,9 @@
 id: tas-KIMP1Fog
 type: task
 title: Add Versioning
-status: todo
+status: done
 createdAt: 2026-02-19T18:39:15.617Z
-updatedAt: 2026-02-19T18:39:15.617Z
+updatedAt: 2026-02-19T21:19:56.506Z
 description: Implement versioning to tkxr starting at 1.0.0 for this release
 assignee: use-JTYCH2se
 sprint: spr-hDifgOv0

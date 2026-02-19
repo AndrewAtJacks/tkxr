@@ -197,7 +197,10 @@
 		<div class="flex items-center justify-between">
 			<div>
 				<h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">tkxr</h1>
-				<p class="text-gray-600 dark:text-gray-400">In-repo ticket management</p>
+				<div class="flex items-center gap-2">
+					<p class="text-gray-600 dark:text-gray-400">In-repo ticket management</p>
+					<span class="text-xs text-gray-500 dark:text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">v1.0.0</span>
+				</div>
 			</div>
 			<div class="flex items-center gap-4">
 				<DarkModeToggle />
