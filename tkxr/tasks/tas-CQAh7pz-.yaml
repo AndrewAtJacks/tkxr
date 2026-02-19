@@ -1,9 +1,9 @@
 id: tas-CQAh7pz-
 type: task
 title: Persist web ui settings
-status: todo
+status: done
 createdAt: 2026-02-19T22:08:58.682Z
-updatedAt: 2026-02-19T22:08:58.682Z
+updatedAt: 2026-02-19T22:56:20.078Z
 description: |-
   Last selected web ui options should be persisted locally (gitignored) 
   - dark mode

@@ -3,8 +3,10 @@ type: task
 title: '"My" user'
 status: todo
 createdAt: 2026-02-19T20:19:57.083Z
-updatedAt: 2026-02-19T20:19:57.083Z
-description: Allow selection of current user from a dropdown. Default assign this user when creating new tickets as assignee.
+updatedAt: 2026-02-19T22:53:36.208Z
+description: >-
+  Allow selection of current user from a dropdown. Default assign this user when creating new tickets as assignee or
+  posting comments
 assignee: use-JTYCH2se
 sprint: spr-hDifgOv0
 priority: medium

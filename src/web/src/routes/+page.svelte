@@ -32,8 +32,79 @@
 	let viewMode = 'grid'; // 'grid' or 'kanban'
 	let createModalDefaultStatus: 'todo' | 'progress' | 'done' | null = null;
 	let showDrawer = false;
+	let settingsLoaded = false; // Flag to prevent saving during initial load
+
+	// UI Settings persistence key
+	const UI_SETTINGS_KEY = 'tkxr-ui-settings';
+
+	// Load initial UI settings immediately (not in onMount)
+	if (typeof window !== 'undefined') {
+		try {
+			const saved = localStorage.getItem(UI_SETTINGS_KEY);
+			if (saved) {
+				const settings = JSON.parse(saved);
+				activeTab = settings.activeTab || 'all-open';
+				selectedSprint = settings.selectedSprint || 'all';
+				searchTerm = settings.searchTerm || '';
+				sortBy = settings.sortBy || 'updated';
+				sortOrder = settings.sortOrder || 'desc';
+				viewMode = settings.viewMode || 'grid';
+			}
+		} catch (error) {
+			console.warn('Failed to load UI settings:', error);
+		}
+	}
+
+	// Load persisted UI settings (now only used for enabling save functionality)
+	function enableSettingsPersistence() {
+		settingsLoaded = true; // Enable saving after initial load
+	}
+
+	// Save UI settings to localStorage
+	function saveUISettings() {
+		if (typeof window === 'undefined') return; // SSR check
+		
+		try {
+			const settings = {
+				activeTab,
+				selectedSprint,
+				searchTerm,
+				sortBy,
+				sortOrder,
+				viewMode,
+				lastUpdated: Date.now()
+			};
+			localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(settings));
+		} catch (error) {
+			console.warn('Failed to save UI settings:', error);
+		}
+	}
+
+	// Reset UI settings to defaults
+	function resetUISettings() {
+		if (typeof window === 'undefined') return; // SSR check
+		
+		try {
+			localStorage.removeItem(UI_SETTINGS_KEY);
+			// Reset to default values
+			activeTab = 'all-open';
+			selectedSprint = 'all';
+			searchTerm = '';
+			sortBy = 'updated';
+			sortOrder = 'desc';
+			viewMode = 'grid';
+		} catch (error) {
+			console.warn('Failed to reset UI settings:', error);
+		}
+	}
+
+	// Reactive statements to save settings when they change (but not during initial load)
+	$: if (settingsLoaded && typeof window !== 'undefined' && (activeTab, selectedSprint, searchTerm, sortBy, sortOrder, viewMode, true)) {
+		saveUISettings();
+	}
 	
 	onMount(() => {
+		enableSettingsPersistence(); // Enable settings saving after component mounts
 		loadData();
 		setupWebSocket();
 	});
@@ -539,11 +610,24 @@
 			</select>
 		</div>
 
+		<!-- Settings Actions -->
+		<div class="mb-6 pt-4 border-t border-gray-200 dark:border-gray-600">
+			<button 
+				class="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 underline w-full text-center"
+				on:click={resetUISettings}
+				title="Reset all view preferences to defaults"
+			>
+				Reset View Settings
+			</button>
+		</div>
+
 		<!-- Manage Button -->
 		
 		<div>
-			<h2 class="flex items-center justify-between">Users & Sprints</h2>
-			<button 
+			<label for="drawer-manage-btn" class="label">
+				Users & Sprints
+			</label>
+			<button id="drawer-manage-btn" 
 			class="btn btn-secondary w-full flex items-center justify-center gap-2"
 			on:click={() => { showManageModal = true; showDrawer = false; }}
 		>
