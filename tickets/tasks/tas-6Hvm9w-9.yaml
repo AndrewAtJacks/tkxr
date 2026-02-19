@@ -1,0 +1,11 @@
+id: tas-6Hvm9w-9
+type: task
+title: Fix NPM vulnerabilities
+status: done
+createdAt: 2026-02-19T18:05:01.380Z
+updatedAt: 2026-02-19T18:41:30.578Z
+description: There were several critical vulnerabilities. These should be fixed before go-live.
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: critical
+estimate: 3

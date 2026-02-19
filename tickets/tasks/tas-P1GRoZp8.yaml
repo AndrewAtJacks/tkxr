@@ -1,0 +1,11 @@
+id: tas-P1GRoZp8
+type: task
+title: Add Ticket Searching and Sorting
+status: done
+createdAt: 2026-02-19T18:31:57.128Z
+updatedAt: 2026-02-19T18:50:42.057Z
+description: Allow tickets to be searched or ordered based on user criteria. Pop open a form to do searches and filters.
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 3

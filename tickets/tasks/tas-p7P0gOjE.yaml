@@ -1,0 +1,11 @@
+id: tas-p7P0gOjE
+type: task
+title: 'Feature: MCP Server'
+status: done
+createdAt: 2026-02-19T18:02:38.689Z
+updatedAt: 2026-02-19T18:18:42.481Z
+description: Add mcp for ai to use the cli and manage tickets.
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 2

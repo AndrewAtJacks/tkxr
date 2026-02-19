@@ -1,0 +1,11 @@
+id: tas-uK1EDig1
+type: task
+title: Better Naming on Tickets
+status: todo
+createdAt: 2026-02-19T18:00:27.660Z
+updatedAt: 2026-02-19T18:00:27.660Z
+description: Task/Bug shows user id, sprint id, not name. Have these display name instead.
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: low
+estimate: 1

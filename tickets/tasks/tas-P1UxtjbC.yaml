@@ -1,0 +1,14 @@
+id: tas-P1UxtjbC
+type: task
+title: Split categories
+status: todo
+createdAt: 2026-02-19T18:30:41.824Z
+updatedAt: 2026-02-19T18:30:41.824Z
+description: |-
+  Instead of current ticket view categories: All tickets, tasks, bugs, to do, in progress, done
+
+  Separate filters into All Tickets, Open Tasks, Open Bugs, To Do, In Progress, Done
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 1

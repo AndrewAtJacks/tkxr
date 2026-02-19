@@ -1,0 +1,11 @@
+id: tas-YWmnoecK
+type: task
+title: CLI does not publish updates to UI
+status: todo
+createdAt: 2026-02-19T18:24:13.205Z
+updatedAt: 2026-02-19T18:24:13.205Z
+description: When the CLI is used, the status and tickets shown in the web UI do not update. Perhaps some polling is needed?
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: low
+estimate: 2

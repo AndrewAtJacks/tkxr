@@ -1,0 +1,16 @@
+id: tas-5nDpXesQ
+type: task
+title: Add Sprint Dropdown
+status: done
+createdAt: 2026-02-19T18:03:56.551Z
+updatedAt: 2026-02-19T18:23:21.011Z
+description: >-
+  Create sprint filter for ticket dashboard, allowing [no sprint] to show tickets without a sprint, or [all tickets] to
+  show everything.
+
+
+  The top numbers (total tickets, bugs, in progress, done) should update to reflect how many are in that sprint.
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 2

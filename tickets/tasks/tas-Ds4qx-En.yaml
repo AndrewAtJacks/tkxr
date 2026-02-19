@@ -1,0 +1,13 @@
+id: tas-Ds4qx-En
+type: task
+title: Add Functionality to Ticket Summary Elements
+status: todo
+createdAt: 2026-02-19T18:40:30.671Z
+updatedAt: 2026-02-19T18:40:30.671Z
+description: >-
+  The big counts on the top of the screen: Total Tickets, Bugs, In Progress, Completed, should be clickable and take the
+  user to the respective view for what they clicked on. Eg. Click Bugs => User is on Bugs view
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 1
