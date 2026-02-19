@@ -1,0 +1,11 @@
+id: tas-PO11dk8L
+type: task
+title: '"My" user'
+status: todo
+createdAt: 2026-02-19T20:19:57.083Z
+updatedAt: 2026-02-19T20:19:57.083Z
+description: Allow selection of current user from a dropdown. Default assign this user when creating new tickets as assignee.
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 2

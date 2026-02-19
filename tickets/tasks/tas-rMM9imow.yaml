@@ -3,7 +3,7 @@ type: task
 title: Misleading sprint complete button
 status: done
 createdAt: 2026-02-19T19:40:35.940Z
-updatedAt: 2026-02-19T20:18:19.266Z
+updatedAt: 2026-02-19T20:20:16.519Z
 description: >-
   The green "Complete" button on the sprint UI looks too much like a tag that shows a complete status. Make it look more
   like a button and not a tag.
