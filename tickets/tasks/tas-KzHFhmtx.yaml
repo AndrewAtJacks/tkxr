@@ -1,0 +1,13 @@
+id: tas-KzHFhmtx
+type: task
+title: Sprint Progress Bar
+status: todo
+createdAt: 2026-02-19T19:24:55.507Z
+updatedAt: 2026-02-19T19:24:55.507Z
+description: >-
+  When this is a sprint selected in the dashboard, show a progress bar (with percentage) that fills based on how many
+  points are done/remaining in the sprint.
+assignee: use-JTYCH2se
+sprint: spr-hDifgOv0
+priority: medium
+estimate: 3

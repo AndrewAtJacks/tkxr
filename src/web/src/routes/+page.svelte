@@ -100,8 +100,8 @@
 			
 			// Tab filter
 			if (activeTab === 'all') return true;
-			if (activeTab === 'tasks') return ticket.type === 'task';
-			if (activeTab === 'bugs') return ticket.type === 'bug';
+			if (activeTab === 'open-tasks') return ticket.type === 'task' && ticket.status !== 'done';
+			if (activeTab === 'open-bugs') return ticket.type === 'bug' && ticket.status !== 'done';
 			if (activeTab === 'todo') return ticket.status === 'todo';
 			if (activeTab === 'progress') return ticket.status === 'progress';
 			if (activeTab === 'done') return ticket.status === 'done';
@@ -300,8 +300,8 @@
 		<nav class="flex space-x-1">
 			{#each [
 				{ id: 'all', label: 'All Tickets', count: sprintFilteredTickets.length },
-				{ id: 'tasks', label: 'Tasks', count: sprintFilteredTickets.filter(t => t.type === 'task').length },
-				{ id: 'bugs', label: 'Bugs', count: sprintFilteredTickets.filter(t => t.type === 'bug').length },
+				{ id: 'open-tasks', label: 'Open Tasks', count: sprintFilteredTickets.filter(t => t.type === 'task' && t.status !== 'done').length },
+				{ id: 'open-bugs', label: 'Open Bugs', count: sprintFilteredTickets.filter(t => t.type === 'bug' && t.status !== 'done').length },
 				{ id: 'todo', label: 'To Do', count: sprintFilteredTickets.filter(t => t.status === 'todo').length },
 				{ id: 'progress', label: 'In Progress', count: sprintFilteredTickets.filter(t => t.status === 'progress').length },
 				{ id: 'done', label: 'Done', count: sprintFilteredTickets.filter(t => t.status === 'done').length }

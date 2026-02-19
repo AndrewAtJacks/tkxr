@@ -1,9 +1,9 @@
 id: tas-P1UxtjbC
 type: task
 title: Split categories
-status: todo
+status: done
 createdAt: 2026-02-19T18:30:41.824Z
-updatedAt: 2026-02-19T18:30:41.824Z
+updatedAt: 2026-02-19T19:27:18.528Z
 description: |-
   Instead of current ticket view categories: All tickets, tasks, bugs, to do, in progress, done
 
