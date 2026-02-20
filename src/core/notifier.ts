@@ -1,10 +1,11 @@
 /**
  * Simple notification client for sending updates from CLI to web server
  */
+
 export class NotificationClient {
   constructor(
     private serverUrl: string = 'http://localhost:8080',
-    private timeout: number = 1000
+    private timeout: number = 5000 // Increased timeout
   ) {}
 
   /**

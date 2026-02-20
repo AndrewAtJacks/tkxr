@@ -47,6 +47,8 @@ export async function startServer(args: ServeArgs): Promise<void> {
   // API Routes
   app.get('/api/tickets', async (req, res) => {
     try {
+      // Reload data from disk to ensure we have the latest changes
+      await storage.loadProject();
       const tickets = await storage.getAllTickets();
       res.json(tickets);
     } catch (error) {
@@ -68,8 +70,8 @@ export async function startServer(args: ServeArgs): Promise<void> {
   });
 
   app.get('/api/sprints', async (req, res) => {
-    try {
-      const sprints = await storage.getSprints();
+    try {      // Reload data from disk to ensure we have the latest changes
+      await storage.loadProject();      const sprints = await storage.getSprints();
       res.json(sprints);
     } catch (error) {
       res.status(500).json({ error: 'Failed to load sprints' });
@@ -77,11 +79,25 @@ export async function startServer(args: ServeArgs): Promise<void> {
   });
 
   app.get('/api/users', async (req, res) => {
-    try {
-      const users = await storage.getUsers();
+    try {      // Reload data from disk to ensure we have the latest changes
+      await storage.loadProject();      const users = await storage.getUsers();
       res.json(users);
     } catch (error) {
       res.status(500).json({ error: 'Failed to load users' });
+    }
+  });
+
+  // Serve server configuration for dynamic client discovery
+  app.get('/api/config', async (req, res) => {
+    try {
+      res.json({
+        host: 'localhost',
+        port: port,
+        url: `http://localhost:${port}`,
+        version: '1.0.0'
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to get server config' });
     }
   });
 

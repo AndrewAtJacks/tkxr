@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import { browser } from '$app/environment';
 	import Plus from '../lib/icons/Plus.svelte';
 	import Bug from '../lib/icons/Bug.svelte';
 	import CheckSquare from '../lib/icons/CheckSquare.svelte';
@@ -34,6 +35,13 @@
 	let createModalDefaultStatus: 'todo' | 'progress' | 'done' | null = null;
 	let showDrawer = false;
 	let settingsLoaded = false; // Flag to prevent saving during initial load
+
+	// WebSocket connection management
+	let ws: WebSocket | null = null;
+	let wsReconnectAttempts = 0;
+	let wsMaxReconnectAttempts = 5;
+	let wsReconnectTimeout: number;
+	let wsHeartbeatInterval: number;
 
 	// UI Settings persistence key
 	const UI_SETTINGS_KEY = 'tkxr-ui-settings';
@@ -112,59 +120,168 @@
 		loadData();
 		setupWebSocket();
 	});
+	
+	onDestroy(() => {
+		cleanupWebSocket();
+	});
 
-	async function loadData() {
+	async function loadData(retryCount = 0) {
 		try {
-			// Load all data concurrently
+			console.debug('Loading data...', retryCount > 0 ? `(retry ${retryCount})` : '');
+			
+			// Load all data concurrently via Vite proxy
 			const [ticketsRes, sprintsRes, usersRes] = await Promise.all([
 				fetch('/api/tickets'),
 				fetch('/api/sprints'),
 				fetch('/api/users')
 			]);
 
+			let hasErrors = false;
+
 			if (ticketsRes.ok) {
 				const tickets = await ticketsRes.json();
 				ticketStore.set(tickets);
+				console.debug('Loaded', tickets.length, 'tickets');
+			} else {
+				console.error('Failed to load tickets:', ticketsRes.status, ticketsRes.statusText);
+				hasErrors = true;
 			}
 
 			if (sprintsRes.ok) {
 				const sprints = await sprintsRes.json();
 				sprintStore.set(sprints);
+				console.debug('Loaded', sprints.length, 'sprints');
+			} else {
+				console.error('Failed to load sprints:', sprintsRes.status, sprintsRes.statusText);
+				hasErrors = true;
 			}
 
 			if (usersRes.ok) {
 				const users = await usersRes.json();
 				userStore.set(users);
+				console.debug('Loaded', users.length, 'users');
+			} else {
+				console.error('Failed to load users:', usersRes.status, usersRes.statusText);
+				hasErrors = true;
 			}
+
+			if (hasErrors && retryCount < 3) {
+				// Retry with exponential backoff if there were errors
+				const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
+				console.debug(`Retrying data load in ${delay}ms (attempt ${retryCount + 1}/3)`);
+				setTimeout(() => loadData(retryCount + 1), delay);
+			}
+
 		} catch (error) {
 			console.error('Failed to load data:', error);
+			
+			// Retry with exponential backoff for network errors
+			if (retryCount < 3) {
+				const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
+				console.debug(`Retrying data load in ${delay}ms due to error (attempt ${retryCount + 1}/3)`);
+				setTimeout(() => loadData(retryCount + 1), delay);
+			}
 		}
 	}
 
 	function setupWebSocket() {
-		const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-		const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+		if (!browser) return;
 		
-		ws.onmessage = (event) => {
-			const message = JSON.parse(event.data);
+		// Close existing connection if any
+		if (ws) {
+			ws.close();
+		}
+		
+		try {
+			const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+			// Connect directly to the same server for WebSocket
+			console.debug('Attempting WebSocket connection to:', `${protocol}//${window.location.host}`);
+			ws = new WebSocket(`${protocol}//${window.location.host}`);
 			
-			if (message.type === 'ticket_created' || 
-				message.type === 'ticket_updated' || 
-				message.type === 'ticket_deleted' ||
-				message.type === 'sprint_created' ||
-				message.type === 'sprint_updated' ||
-				message.type === 'user_created') {
-				loadData(); // Simple refresh for now
-			}
-		};
-		
-		ws.onopen = () => {
-			console.debug('WebSocket connected');
-		};
-		
-		ws.onclose = () => {
-			console.debug('WebSocket disconnected');
-		};
+			ws.onopen = () => {
+				console.debug('WebSocket connected successfully');
+				wsReconnectAttempts = 0; // Reset reconnect attempts on successful connection
+				
+				// Set up heartbeat to keep connection alive
+				wsHeartbeatInterval = window.setInterval(() => {
+					if (ws && ws.readyState === WebSocket.OPEN) {
+						ws.send(JSON.stringify({ type: 'ping' }));
+					}
+				}, 30000); // Ping every 30 seconds
+			};
+			
+			ws.onmessage = (event) => {
+				try {
+					const message = JSON.parse(event.data);
+					console.debug('WebSocket message received:', message);
+					
+					// Handle pong responses
+					if (message.type === 'pong') {
+						return;
+					}
+					
+					// Handle data updates
+					if (message.type === 'ticket_created' || 
+						message.type === 'ticket_updated' || 
+						message.type === 'ticket_deleted' ||
+						message.type === 'sprint_created' ||
+						message.type === 'sprint_updated' ||
+						message.type === 'sprint_deleted' ||
+						message.type === 'user_created' ||
+						message.type === 'user_updated' ||
+						message.type === 'user_deleted') {
+						console.debug('Data update received, reloading...');
+						loadData(); // Reload data when updates occur
+					}
+				} catch (error) {
+					console.error('Error parsing WebSocket message:', error, event.data);
+				}
+			};
+			
+			ws.onclose = (event) => {
+				console.debug('WebSocket closed:', event.code, event.reason);
+				
+				// Clear heartbeat interval
+				if (wsHeartbeatInterval) {
+					clearInterval(wsHeartbeatInterval);
+				}
+				
+				// Attempt reconnection if not intentionally closed and haven't exceeded max attempts
+				if (event.code !== 1000 && wsReconnectAttempts < wsMaxReconnectAttempts) {
+					wsReconnectAttempts++;
+					const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts - 1), 30000); // Exponential backoff, max 30s
+					
+					console.debug(`WebSocket reconnect attempt ${wsReconnectAttempts}/${wsMaxReconnectAttempts} in ${delay}ms`);
+					
+					wsReconnectTimeout = window.setTimeout(() => {
+						setupWebSocket();
+					}, delay);
+				} else {
+					console.warn('WebSocket connection failed after', wsMaxReconnectAttempts, 'attempts');
+				}
+			};
+			
+			ws.onerror = (error) => {
+				console.error('WebSocket error:', error);
+			};
+			
+		} catch (error) {
+			console.error('Failed to create WebSocket connection:', error);
+		}
+	}
+	
+	// Clean up WebSocket connection when component is destroyed
+	function cleanupWebSocket() {
+		if (wsReconnectTimeout) {
+			clearTimeout(wsReconnectTimeout);
+		}
+		if (wsHeartbeatInterval) {
+			clearInterval(wsHeartbeatInterval);
+		}
+		if (ws) {
+			ws.close(1000); // Normal closure
+			ws = null;
+		}
 	}
 
 	function handleEditTicket(ticket) {

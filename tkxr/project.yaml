@@ -2,7 +2,7 @@ version: '1.0'
 project:
   name: TKXR Project
   created: 2026-02-20T00:07:33.385Z
-  updated: 2026-02-20T00:47:54.396Z
+  updated: 2026-02-20T01:42:46.300Z
 tickets:
   - id: tas-0oTc10Cq
     type: task
@@ -426,12 +426,6 @@ tickets:
     assignee: use-JTYCH2se
     sprint: spr-hDifgOv0
     priority: high
-  - id: tas-8xUIxtgy
-    type: task
-    title: Test single-file storage
-    status: todo
-    createdAt: 2026-02-20T00:10:02.458Z
-    updatedAt: 2026-02-20T00:10:02.458Z
   - id: tas-3NY-DvSC
     type: task
     title: Fix Progress Bar layout
@@ -446,14 +440,35 @@ tickets:
   - id: bug-hgCM7vH6
     type: bug
     title: Web UI not updating
-    status: todo
+    status: done
     createdAt: 2026-02-20T00:41:04.611Z
-    updatedAt: 2026-02-20T00:47:35.962Z
+    updatedAt: 2026-02-20T01:40:04.275Z
     description: After single file change, the webui doesn't stay up to date with changes from the cli anymore.
     assignee: use-JTYCH2se
     sprint: spr-hDifgOv0
     priority: critical
     estimate: 3
+  - id: bug-vzxgpckL
+    type: bug
+    title: Test WebSocket Notification
+    status: done
+    createdAt: 2026-02-20T01:07:27.067Z
+    updatedAt: 2026-02-20T01:10:00.570Z
+    description: Testing that CLI changes update the web UI in real-time
+  - id: tas-J_PFToRL
+    type: task
+    title: WebSocket Test
+    status: done
+    createdAt: 2026-02-20T01:14:16.305Z
+    updatedAt: 2026-02-20T01:15:00.459Z
+    description: Testing real-time notifications
+  - id: tas-F5t3eWw3
+    type: task
+    title: Clean Version Test
+    status: todo
+    createdAt: 2026-02-20T01:42:46.299Z
+    updatedAt: 2026-02-20T01:42:46.299Z
+    description: Final test without debug logging
 sprints:
   - id: spr-GqmnrDyV
     name: JIRA Integration
@@ -489,6 +504,11 @@ users:
     createdAt: 2026-02-19T17:23:45.272Z
     updatedAt: 2026-02-19T17:23:45.272Z
     email: andrew@jacks.com
+  - id: use-1r2EUFtv
+    username: testuser
+    displayName: testuser
+    createdAt: 2026-02-20T01:07:52.054Z
+    updatedAt: 2026-02-20T01:07:52.054Z
 comments:
   - id: com-76hK6vvE
     ticketId: tas-IvIExFTv
