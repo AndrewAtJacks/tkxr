@@ -1,63 +1,70 @@
 # tkxr - In-Repo Ticket Management System
 
-A lightweight, file-based ticket management system with CLI and web interface. Perfect for small teams who want Jira-like functionality without external dependencies.
+tkxr is a lightweight, file-based ticket management system with a modern web UI for human users, and CLI/MCP server interfaces for AI and automation. It uses chunked NDJSON for tickets/comments and JSON for sprints/users, ensuring scalable, fast, and version-controlled workflows. Ideal for small teams wanting Jira-like functionality without external dependencies.
 
 ## Features
 
-- 📁 **File-based Storage** - Tickets stored as YAML files in your repo
-- 🚀 **CLI Interface** - Manage tickets from the command line
-- 🌐 **Web Dashboard** - Beautiful web UI with sprint filtering
-- 🤖 **AI Integration** - MCP server for AI-powered ticket management
+- 📁 **File-based Storage** - Tickets and comments stored as NDJSON chunks, sprints/users as JSON
+- 🌐 **Web Dashboard** - The primary interface for humans to view, manage, and interact with tickets, sprints, users, and comments
+- 🚀 **CLI Interface** - Designed for automation, scripting, and AI agents to manage tickets
+- 🤖 **AI Integration** - MCP server enables AI assistants to interact with tickets, sprints, users, and comments
 - 🔄 **Real-time Updates** - WebSocket-powered live updates
 - 🏃 **Sprint Management** - Complete sprint lifecycle management
 - 👥 **User Management** - Assign tickets to team members
-- 🏷️ **Labels & Priorities** - Organize and prioritize work
+- 💬 **Comment Support** - Add, list, and manage comments for tickets
 - ⚡ **Zero Dependencies** - No external databases required
 
 ## Installation
 
-Install globally via npm:
+### Run tkxr instantly with npx or pnpm dlx
+
+You do not need to install tkxr globally. Run any command directly using pnpm dlx or npx:
 
 ```bash
-npm install -g tkxr
+# Using pnpm dlx
+pnpm dlx tkxr serve         # Start the web interface
+pnpm dlx tkxr mcp           # Start the MCP server
+pnpm dlx tkxr list          # List tickets
+pnpm dlx tkxr create task "Title"  # Create a task
+pnpm dlx tkxr comments <ticket-id>  # Manage comments
+
+# Using npx
+npx tkxr serve              # Start the web interface
+npx tkxr mcp                # Start the MCP server
+npx tkxr list               # List tickets
+npx tkxr create task "Title"       # Create a task
+npx tkxr comments <ticket-id>      # Manage comments
 ```
 
-Or use directly with npx:
+Global install is optional:
 
 ```bash
-npx tkxr --help
+pnpm install -g tkxr
 ```
 
 ## Quick Start
+> **Human users:** Use the web UI for all ticket management, sprint planning, and user interactions. Open http://localhost:8080 after running `pnpm dlx tkxr serve`.
+> **AI/automation:** Use the CLI or MCP server for programmatic access, scripting, and integration with AI tools.
 
-### 1. Create your first tickets
+### 1. Create your first tickets and comments
 
 ```bash
-# Create a task
 tkxr create task "Implement user login"
-
-# Create a bug
 tkxr create bug "Fix navigation menu"
-
-# Create a sprint
 tkxr sprint create "Sprint 1 - Authentication"
-
-# Create a user
 tkxr user create johndoe "John Doe" --email john@example.com
+# Add a comment to a ticket
+tkxr comments tas-AbCdEfGh --add --author johndoe --content "This is a comment"
 ```
 
 ### 2. List and manage entities
 
 ```bash
-# List all tickets
 tkxr list
-
-# List users and sprints
 tkxr users
 tkxr sprints
-
-# Update sprint status
 tkxr sprint status spr-abc123 active
+tkxr comments tas-AbCdEfGh           # List comments for a ticket
 ```
 
 ### 3. Update ticket status
@@ -84,7 +91,7 @@ Open http://localhost:8080 in your browser to access the web dashboard.
 
 ## CLI Commands
 
-### Ticket Commands
+### Ticket & Comment Commands
 
 ```bash
 # Create tickets with options
@@ -108,8 +115,11 @@ tkxr list bugs               # Only bugs
 tkxr status <ticket-id> <status>
 # Valid statuses: todo, progress, done
 
-# Delete tickets
 tkxr delete <ticket-id>
+
+# Comment management
+tkxr comments <ticket-id>             # List comments
+tkxr comments <ticket-id> --add --author <user-id> --content "Comment text"   # Add comment
 ```
 
 ### User Management
@@ -171,12 +181,22 @@ tkxr includes a Model Context Protocol (MCP) server that enables AI assistants t
 ### Starting the MCP Server
 
 ```bash
-tkxr mcp
+npx tkxr mcp           # If not installed globally
+pnpm dlx tkxr mcp      # Or use pnpm dlx
+tkxr mcp               # Only if installed globally
 ```
 
 ### Available MCP Tools
 
 The MCP server provides these tools for AI assistants:
+
+- `list_tickets` - List all tickets with optional filtering
+- `create_ticket` - Create new tasks or bugs
+- `update_ticket_status` - Change ticket status
+- `delete_ticket` - Remove tickets
+- `list_users` / `create_user` - User management
+- `list_sprints` / `create_sprint` / `update_sprint_status` - Sprint management
+- `list_comments` / `add_comment` - Comment management
 
 - `list_tickets` - List all tickets with optional filtering
 - `create_ticket` - Create new tasks or bugs
@@ -217,6 +237,7 @@ Configure your AI assistant to connect to the MCP server:
 - 📊 Overview statistics (sprint-aware)
 - 🎯 **Sprint dropdown filter** - Filter by specific sprint or "No Sprint"
 - 📋 Ticket cards with status indicators
+- 💬 Comment modal for ticket conversations
 - 🔄 Real-time updates via WebSocket
 - 📈 Dynamic stats that update based on sprint selection
 
@@ -248,68 +269,54 @@ Configure your AI assistant to connect to the MCP server:
 
 ## File Structure
 
-tkxr organizes tickets in your repository:
+tkxr organizes tickets, comments, sprints, and users in your repository:
 
 ```
-tickets/
-├── tasks/
-│   ├── tas-AbCdEfGh.yaml
-│   └── tas-XyZ12345.yaml
-├── bugs/
-│   ├── bug-MnOpQrSt.yaml
-│   └── bug-UvWx6789.yaml
-├── sprints/
-│   ├── spr-12345678.yaml
-│   └── spr-87654321.yaml
-└── users/
-    ├── usr-UserAbc1.yaml
-    └── usr-UserDef2.yaml
+tkxr/
+├── tickets/
+│   ├── tickets-0001.ndjson
+│   └── tickets-0002.ndjson
+├── comments/
+│   ├── comments-0001.ndjson
+│   └── comments-0002.ndjson
+├── sprints.json
+├── users.json
 ```
 
 ### Example Files
 
-#### Ticket (YAML)
-```yaml
-id: tas-12AbCdEf
-type: task
-title: Implement user authentication
-description: |
-  Add user authentication system with login/logout functionality.
-  Requirements:
-  - Login form with validation
-  - Session management
-  - Protected routes
-status: progress
-assignee: usr-98XyZaBc
-sprint: spr-45FgHiJk
-estimate: 8
-priority: high
-createdAt: 2026-02-19T10:30:00.000Z
-updatedAt: 2026-02-19T14:15:00.000Z
-```
+#### Ticket (NDJSON)
+Each line is a JSON object:
+{"id":"tas-12AbCdEf","type":"task","title":"Implement user authentication","description":"Add user authentication system...","status":"progress","assignee":"usr-98XyZaBc","sprint":"spr-45FgHiJk","estimate":8,"priority":"high","createdAt":"2026-02-19T10:30:00.000Z","updatedAt":"2026-02-19T14:15:00.000Z"}
 
-#### Sprint (YAML)
-```yaml
-id: spr-45FgHiJk
-name: Sprint 1 - Authentication
-description: Implement core authentication features
-status: active
-goal: Complete user login and registration
-createdAt: 2026-02-19T09:00:00.000Z
-updatedAt: 2026-02-19T11:00:00.000Z
-```
+#### Sprint (JSON)
+{
+  "id": "spr-45FgHiJk",
+  "name": "Sprint 1 - Authentication",
+  "description": "Implement core authentication features",
+  "status": "active",
+  "goal": "Complete user login and registration",
+  "createdAt": "2026-02-19T09:00:00.000Z",
+  "updatedAt": "2026-02-19T11:00:00.000Z"
+}
 
-#### User (YAML)
-```yaml
-id: usr-98XyZaBc
-username: johndoe
-displayName: John Doe
-email: john@example.com
-createdAt: 2026-02-19T08:00:00.000Z
-updatedAt: 2026-02-19T08:00:00.000Z
-```
+#### User (JSON)
+{
+  "id": "usr-98XyZaBc",
+  "username": "johndoe",
+  "displayName": "John Doe",
+  "email": "john@example.com",
+  "createdAt": "2026-02-19T08:00:00.000Z",
+  "updatedAt": "2026-02-19T08:00:00.000Z"
+}
+#### Comment (NDJSON)
+Each line is a JSON object:
+{"id":"com-1a2b3c4d","ticketId":"tas-12AbCdEf","author":"usr-98XyZaBc","content":"This is a comment","createdAt":"2026-02-19T12:00:00.000Z"}
 
 ## Advanced Usage
+# Comment workflows
+tkxr comments tas-12AbCdEf --add --author johndoe --content "Ready for review"
+tkxr comments tas-12AbCdEf           # List all comments for ticket
 
 ### Sprint Workflow
 
@@ -348,7 +355,7 @@ git log --follow tickets/tasks/tas-12345678.yaml
 
 ```bash
 # Start MCP server for AI integration
-tkxr mcp &
+tkxr mcp
 
 # AI can now:
 # - Analyze ticket backlogs
@@ -359,6 +366,9 @@ tkxr mcp &
 ```
 
 ## API Reference
+# Comments
+GET  /api/comments/:ticketId         # List comments for ticket
+POST /api/comments/:ticketId         # Add comment to ticket
 
 ### REST API
 
@@ -398,17 +408,20 @@ ws.onmessage = (event) => {
 ```
 
 ## Configuration
+# Server Configuration
 
-### Environment Variables
+The `.env.tkxr` file is dynamically created by the web UI server. It stores the host, port, and URL for the web interface (default: http://localhost:8080) in standard dotenv format:
 
-```bash
-# Custom ticket directory
-export TKXR_TICKETS_DIR="./project-tickets"
-
-# Custom server settings
-export TKXR_DEFAULT_PORT="3000"
+```
+TKXR_HOST=localhost
+TKXR_PORT=8080
 ```
 
+You can override the web UI port by editing `.env.tkxr`, using CLI flags:
+
+```bash
+pnpm dlx tkxr serve --port 3000
+```
 ### Development
 
 ```bash
@@ -444,4 +457,4 @@ MIT License - see LICENSE file for details.
 
 ---
 
-**tkxr** - Making ticket management simple, transparent, version-controlled, and AI-powered. 🎯
+**tkxr** - Making ticket management simple, transparent, version-controlled, and AI-powered.

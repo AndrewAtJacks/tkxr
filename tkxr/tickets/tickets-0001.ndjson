@@ -32,4 +32,3 @@
 {"id":"bug-vzxgpckL","type":"bug","title":"Test WebSocket Notification","status":"done","createdAt":"2026-02-20T01:07:27.067Z","updatedAt":"2026-02-20T01:10:00.570Z","description":"Testing that CLI changes update the web UI in real-time"}
 {"id":"tas-J_PFToRL","type":"task","title":"WebSocket Test","status":"done","createdAt":"2026-02-20T01:14:16.305Z","updatedAt":"2026-02-20T01:15:00.459Z","description":"Testing real-time notifications"}
 {"id":"bug-VCiuqs5L","type":"bug","title":"add comment does not reload web ui","status":"done","createdAt":"2026-02-20T01:47:40.868Z","updatedAt":"2026-02-20T02:14:35.754Z","description":"make sure when the cli is used to add a comment, the web ui is notified and refreshes","assignee":"use-JTYCH2se","sprint":"spr-hDifgOv0","priority":"medium","estimate":2}
-{"id":"tas-tprP6eoi","type":"task","title":"WebUI Realtime Test Ticket","status":"done","createdAt":"2026-02-20T23:27:31.624Z","updatedAt":"2026-02-20T23:27:57.455Z"}

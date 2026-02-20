@@ -29,15 +29,12 @@ export async function startServer(args: ServeArgs): Promise<void> {
   
   // Save server config for other CLI commands to use
   try {
-    const configPath = path.join(process.cwd(), '.tkxr-server');
-    await fs.writeFile(configPath, JSON.stringify({ 
-      host, 
-      port, 
-      url: serverUrl 
-    }), 'utf8');
+    const configPath = path.join(process.cwd(), '.env.tkxr');
+    const envContent = `TKXR_HOST=${host}\nTKXR_PORT=${port}\n`;
+    await fs.writeFile(configPath, envContent, 'utf8');
   } catch (error) {
     // Don't fail if we can't write config
-    console.debug('Could not save server config:', error);
+    console.debug('Could not save .env.tkxr config:', error);
   }
 
   // Middleware
@@ -510,7 +507,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
     
     // Clean up server config file
     try {
-      const configPath = path.join(process.cwd(), '.tkxr-server');
+      const configPath = path.join(process.cwd(), '.env.tkxr');
       unlinkSync(configPath);
     } catch (error) {
       // Ignore cleanup errors
