@@ -47,6 +47,7 @@
 	let createModalDefaultStatus: 'todo' | 'progress' | 'done' | null = null;
 	let showDrawer = false;
 	let settingsLoaded = false; // Flag to prevent saving during initial load
+	let appVersion = 'v1.0.0'; // Will be updated from server
 
 	// WebSocket connection management
 	let ws: WebSocket | null = null;
@@ -169,10 +170,11 @@
 			console.debug('Loading data...', retryCount > 0 ? `(retry ${retryCount})` : '');
 			
 			// Load all data concurrently via Vite proxy
-			const [ticketsRes, sprintsRes, usersRes] = await Promise.all([
+			const [ticketsRes, sprintsRes, usersRes, configRes] = await Promise.all([
 				fetch('/api/tickets'),
 				fetch('/api/sprints'),
-				fetch('/api/users')
+				fetch('/api/users'),
+				fetch('/api/config')
 			]);
 
 			let hasErrors = false;
@@ -202,6 +204,16 @@
 			} else {
 				console.error('Failed to load users:', usersRes.status, usersRes.statusText);
 				hasErrors = true;
+			}
+
+			if (configRes.ok) {
+				const config = await configRes.json();
+				if (config.version) {
+					appVersion = `v${config.version}`;
+				}
+				console.debug('Server version:', config.version);
+			} else {
+				console.debug('Failed to load config:', configRes.status);
 			}
 
 			if (hasErrors && retryCount < 3) {
@@ -531,7 +543,7 @@
 				<h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">tkxr</h1>
 				<div class="flex items-center gap-2">
 					<p class="text-gray-600 dark:text-gray-400">In-repo ticket management</p>
-					<span class="text-xs text-gray-500 dark:text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">v1.0.0</span>
+					<span class="text-xs text-gray-500 dark:text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">{appVersion}</span>
 				</div>
 			</div>
 			<nav class="flex items-center gap-4" aria-label="Application controls">
