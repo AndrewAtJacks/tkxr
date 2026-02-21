@@ -20,14 +20,16 @@
 	import TicketCard from '../lib/TicketCard.svelte';
 	import KanbanBoard from '../lib/KanbanBoard.svelte';
 	import CreateTicketModal from '../lib/CreateTicketModal.svelte';
-	import ManageModal from '../lib/ManageModal.svelte';
+	import SprintManagementModal from '../lib/SprintManagementModal.svelte';
+	import UserManagementModal from '../lib/UserManagementModal.svelte';
 	import EditTicketModal from '../lib/EditTicketModal.svelte';
 	import CommentsModal from '../lib/CommentsModal.svelte';
 	import DarkModeToggle from '../lib/DarkModeToggle.svelte';
 	import { ticketStore, sprintStore, userStore } from '../lib/stores';
 
 	let showCreateModal = false;
-	let showManageModal = false;
+	let showSprintModal = false;
+	let showUserModal = false;
 	let showEditModal = false;
 	let showCommentsModal = false;
 	let editingTicket = null;
@@ -36,12 +38,16 @@
 	let selectedSprint = 'all'; // all, no-sprint, or sprint ID
 	let selectedUser = 'all'; // all, or user ID
 	let searchTerm = '';
+	let sprintSearchTerm = '';
+	let sprintComboboxOpen = false;
+	let sprintComboboxFocusedIndex = -1;
 	let sortBy = 'updated'; // updated, created, title, priority, status
 	let sortOrder = 'desc'; // asc, desc
 	let viewMode = 'grid'; // 'grid' or 'kanban'
 	let createModalDefaultStatus: 'todo' | 'progress' | 'done' | null = null;
 	let showDrawer = false;
 	let settingsLoaded = false; // Flag to prevent saving during initial load
+	let appVersion = 'v1.0.0'; // Will be updated from server
 
 	// WebSocket connection management
 	let ws: WebSocket | null = null;
@@ -126,21 +132,49 @@
 		enableSettingsPersistence(); // Enable settings saving after component mounts
 		loadData();
 		setupWebSocket();
+
+		// Click outside handler for sprint combobox
+		const handleClickOutside = (event: MouseEvent) => {
+			const target = event.target as HTMLElement;
+			const combobox = document.getElementById('drawer-sprint-combobox');
+			const dropdown = combobox?.nextElementSibling?.nextElementSibling;
+			
+			if (combobox && dropdown && 
+				!combobox.contains(target) && 
+				!dropdown.contains(target)) {
+				sprintComboboxOpen = false;
+				sprintSearchTerm = '';
+				sprintComboboxFocusedIndex = -1;
+			}
+		};
+
+		document.addEventListener('click', handleClickOutside);
+		
+		return () => {
+			document.removeEventListener('click', handleClickOutside);
+		};
 	});
 	
 	onDestroy(() => {
 		cleanupWebSocket();
 	});
 
+	// Helper function to truncate long text with ellipsis
+	function truncate(text: string, maxLength: number): string {
+		if (text.length <= maxLength) return text;
+		return text.substring(0, maxLength - 3) + '...';
+	}
+
 	async function loadData(retryCount = 0) {
 		try {
 			console.debug('Loading data...', retryCount > 0 ? `(retry ${retryCount})` : '');
 			
 			// Load all data concurrently via Vite proxy
-			const [ticketsRes, sprintsRes, usersRes] = await Promise.all([
+			const [ticketsRes, sprintsRes, usersRes, configRes] = await Promise.all([
 				fetch('/api/tickets'),
 				fetch('/api/sprints'),
-				fetch('/api/users')
+				fetch('/api/users'),
+				fetch('/api/config')
 			]);
 
 			let hasErrors = false;
@@ -170,6 +204,16 @@
 			} else {
 				console.error('Failed to load users:', usersRes.status, usersRes.statusText);
 				hasErrors = true;
+			}
+
+			if (configRes.ok) {
+				const config = await configRes.json();
+				if (config.version) {
+					appVersion = `v${config.version}`;
+				}
+				console.debug('Server version:', config.version);
+			} else {
+				console.debug('Failed to load config:', configRes.status);
 			}
 
 			if (hasErrors && retryCount < 3) {
@@ -313,14 +357,58 @@
 		showCommentsModal = true;
 	}
 
+	// Sprint combobox handlers
+	function getSprintDisplayName(sprintId: string) {
+		if (sprintId === 'all') return 'Filter by Sprint...';
+		if (sprintId === 'no-sprint') return 'Unassigned';
+		const sprint = $sprintStore.find(s => s.id === sprintId);
+		return sprint ? sprint.name : 'Unknown Sprint';
+	}
+
+	function selectSprintOption(sprintId: string) {
+		selectedSprint = sprintId;
+		sprintComboboxOpen = false;
+		sprintSearchTerm = '';
+		sprintComboboxFocusedIndex = -1;
+	}
+
+	function clearSprintFilter() {
+		selectedSprint = 'all';
+		sprintSearchTerm = '';
+		sprintComboboxFocusedIndex = -1;
+	}
+
+	function handleSprintComboboxKeydown(e: KeyboardEvent) {
+		const options = [
+			...filteredSprints.map(s => ({ id: s.id, name: s.name })),
+			{ id: 'no-sprint', name: 'Unassigned' }
+		];
+
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			sprintComboboxOpen = true;
+			sprintComboboxFocusedIndex = Math.min(sprintComboboxFocusedIndex + 1, options.length - 1);
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			sprintComboboxFocusedIndex = Math.max(sprintComboboxFocusedIndex - 1, 0);
+		} else if (e.key === 'Enter') {
+			e.preventDefault();
+			if (sprintComboboxFocusedIndex >= 0 && sprintComboboxFocusedIndex < options.length) {
+				selectSprintOption(options[sprintComboboxFocusedIndex].id);
+			}
+		} else if (e.key === 'Escape') {
+			e.preventDefault();
+			sprintComboboxOpen = false;
+			sprintSearchTerm = '';
+			sprintComboboxFocusedIndex = -1;
+		}
+	}
+
 	$: filteredTickets = $ticketStore
 		.filter(ticket => {
 			// Sprint filter
 			if (selectedSprint === 'no-sprint' && ticket.sprint) return false;
 			if (selectedSprint !== 'all' && selectedSprint !== 'no-sprint' && ticket.sprint !== selectedSprint) return false;
-			
-			// User filter
-			if (selectedUser !== 'all' && ticket.assignee !== selectedUser) return false;
 			
 			// Search filter
 			if (searchTerm) {
@@ -381,11 +469,30 @@
 			return sortOrder === 'desc' ? -compareValue : compareValue;
 		});
 
-	// Calculate stats based on filtered tickets by sprint and user
+	// Filter sprints for dropdown (exclude completed, apply search)
+	$: filteredSprints = $sprintStore
+		.filter(s => s.status !== 'completed')
+		.filter(s => {
+			if (!sprintSearchTerm.trim()) return true;
+			const term = sprintSearchTerm.toLowerCase();
+			return s.name.toLowerCase().includes(term) || 
+			       (s.description && s.description.toLowerCase().includes(term));
+		})
+		.sort((a, b) => {
+			// Sort matches to the top
+			if (!sprintSearchTerm.trim()) return 0;
+			const term = sprintSearchTerm.toLowerCase();
+			const aNameMatch = a.name.toLowerCase().includes(term);
+			const bNameMatch = b.name.toLowerCase().includes(term);
+			if (aNameMatch && !bNameMatch) return -1;
+			if (!aNameMatch && bNameMatch) return 1;
+			return a.name.localeCompare(b.name);
+		});
+
+	// Calculate stats based on filtered tickets by sprint
 	$: sprintFilteredTickets = $ticketStore.filter(ticket => {
 		if (selectedSprint === 'no-sprint' && ticket.sprint) return false;
 		if (selectedSprint !== 'all' && selectedSprint !== 'no-sprint' && ticket.sprint !== selectedSprint) return false;
-		if (selectedUser !== 'all' && ticket.assignee !== selectedUser) return false;
 		return true;
 	});
 
@@ -436,7 +543,7 @@
 				<h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">tkxr</h1>
 				<div class="flex items-center gap-2">
 					<p class="text-gray-600 dark:text-gray-400">In-repo ticket management</p>
-					<span class="text-xs text-gray-500 dark:text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">v1.0.0</span>
+					<span class="text-xs text-gray-500 dark:text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">{appVersion}</span>
 				</div>
 			</div>
 			<nav class="flex items-center gap-4" aria-label="Application controls">
@@ -481,11 +588,10 @@
 						aria-controls="filter-drawer"
 					>
 						<Menu size={20} aria-hidden="true" />
-						<span class="hidden sm:inline">Options</span>
 					</button>
 					
 					<!-- Filter Active Badge -->
-					{#if searchTerm || selectedUser !== 'all'}
+					{#if searchTerm}
 						<div class="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full border-2 border-white dark:border-gray-800" 
 							 aria-hidden="true" title="Active filters applied"></div>
 					{/if}
@@ -698,10 +804,18 @@
 		/>
 	{/if}
 
-	<!-- Manage Modal -->
-	{#if showManageModal}
-		<ManageModal 
-			on:close={() => showManageModal = false}
+	<!-- Sprint Management Modal -->
+	{#if showSprintModal}
+		<SprintManagementModal 
+			on:close={() => showSprintModal = false}
+			on:updated={loadData}
+		/>
+	{/if}
+
+	<!-- User Management Modal -->
+	{#if showUserModal}
+		<UserManagementModal 
+			on:close={() => showUserModal = false}
 			on:updated={loadData}
 		/>
 	{/if}
@@ -736,7 +850,7 @@
 	<div class="p-6">
 		<!-- Drawer Header -->
 		<div class="flex items-center justify-between mb-6">
-			<h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Search & Filters</h2>
+			<h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Options</h2>
 			<button 
 				class="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
 				on:click={() => showDrawer = false}
@@ -794,22 +908,83 @@
 			</div>
 		</div>
 
-		<!-- Sprint Filter -->
-		<div class="mb-6">
-			<label for="drawer-sprint-filter" class="label">
+		<!-- Sprint Filter Combobox -->
+		<div class="mb-6 relative">
+			<label for="drawer-sprint-combobox" class="label">
 				Filter by Sprint
 			</label>
-			<select 
-				id="drawer-sprint-filter"
-				bind:value={selectedSprint}
-				class="select w-full"
-			>
-				<option value="all">All Tickets</option>
-				<option value="no-sprint">No Sprint</option>
-				{#each $sprintStore.filter(s => s.status !== 'completed') as sprint}
-					<option value={sprint.id}>{sprint.name}</option>
-				{/each}
-			</select>
+			<div class="relative">
+				<input
+					id="drawer-sprint-combobox"
+					type="text"
+					placeholder={selectedSprint === 'all' ? 'Filter by Sprint...' : ''}
+					value={sprintSearchTerm || (selectedSprint !== 'all' ? getSprintDisplayName(selectedSprint) : '')}
+					on:input={(e) => sprintSearchTerm = e.currentTarget.value}
+					on:focus={() => { sprintComboboxOpen = true; sprintComboboxFocusedIndex = -1; }}
+					on:keydown={handleSprintComboboxKeydown}
+					on:click={() => sprintComboboxOpen = true}
+					class="input w-full {selectedSprint !== 'all' ? 'pr-16' : 'pr-8'}"
+					autocomplete="off"
+				>
+				{#if selectedSprint !== 'all'}
+					<button
+						type="button"
+						class="absolute right-8 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+						on:click={clearSprintFilter}
+						aria-label="Clear sprint filter"
+					>
+						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+						</svg>
+					</button>
+				{/if}
+				<button
+					type="button"
+					class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+					on:click={() => sprintComboboxOpen = !sprintComboboxOpen}
+					aria-label="Toggle sprint dropdown"
+				>
+					<svg class="w-4 h-4 transition-transform {sprintComboboxOpen ? 'rotate-180' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+					</svg>
+				</button>
+				
+				{#if sprintComboboxOpen}
+					<div 
+						class="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-y-auto"
+						on:click|stopPropagation
+					>
+						{#each filteredSprints as sprint, i}
+							<!-- svelte-ignore a11y-click-events-have-key-events -->
+							<!-- svelte-ignore a11y-no-static-element-interactions -->
+							<div
+								class="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer {sprintComboboxFocusedIndex === i ? 'bg-gray-100 dark:bg-gray-700' : ''}"
+								on:click={() => selectSprintOption(sprint.id)}
+								on:mouseenter={() => sprintComboboxFocusedIndex = i}
+							>
+								<div class="text-sm text-gray-900 dark:text-gray-100">{sprint.name}</div>
+								{#if sprint.description}
+									<div class="text-xs text-gray-500 dark:text-gray-400 truncate">{sprint.description}</div>
+								{/if}
+							</div>
+						{/each}
+						<!-- svelte-ignore a11y-click-events-have-key-events -->
+						<!-- svelte-ignore a11y-no-static-element-interactions -->
+						<div
+							class="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer {sprintComboboxFocusedIndex === filteredSprints.length ? 'bg-gray-100 dark:bg-gray-700' : ''}"
+							on:click={() => selectSprintOption('no-sprint')}
+							on:mouseenter={() => sprintComboboxFocusedIndex = filteredSprints.length}
+						>
+							<div class="text-sm text-gray-900 dark:text-gray-100">Unassigned</div>
+						</div>
+						{#if filteredSprints.length === 0 && sprintSearchTerm.trim()}
+							<div class="px-3 py-2 text-sm text-gray-500 dark:text-gray-400 italic">
+								No sprints found
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</div>
 		</div>
 
 		<!-- User Filter -->
@@ -821,11 +996,16 @@
 				id="drawer-user-filter"
 				bind:value={selectedUser}
 				class="select w-full"
+				disabled={$userStore.length === 0}
 			>
-				<option value="all">All Users</option>
-				{#each $userStore as user}
-					<option value={user.id}>{user.displayName} (@{user.username})</option>
-				{/each}
+				{#if $userStore.length === 0}
+					<option value="all">No Users</option>
+				{:else}
+					<option value="all">All Users</option>
+					{#each $userStore as user}
+						<option value={user.id}>{user.displayName} (@{user.username})</option>
+					{/each}
+				{/if}
 			</select>
 		</div>
 
@@ -840,18 +1020,30 @@
 			</button>
 		</div>
 
-		<!-- Manage Button -->
-		
-		<div>
-			<label for="drawer-manage-btn" class="label">
-				Users & Sprints
-			</label>
-			<button id="drawer-manage-btn" 
-			class="btn btn-secondary w-full flex items-center justify-center gap-2"
-			on:click={() => { showManageModal = true; showDrawer = false; }}
-		>
-			Manage
-		</button>
+		<!-- Management Buttons -->
+		<div class="space-y-3">
+			<div>
+				<label for="drawer-sprint-btn" class="label">
+					Sprint Management
+				</label>
+				<button id="drawer-sprint-btn" 
+					class="btn btn-secondary w-full flex items-center justify-center gap-2"
+					on:click={() => { showSprintModal = true; showDrawer = false; }}
+				>
+					Manage Sprints
+				</button>
+			</div>
+			<div>
+				<label for="drawer-user-btn" class="label">
+					User Management
+				</label>
+				<button id="drawer-user-btn" 
+					class="btn btn-secondary w-full flex items-center justify-center gap-2"
+					on:click={() => { showUserModal = true; showDrawer = false; }}
+				>
+					Manage Users
+				</button>
+			</div>
 		</div>
 	</div>
 </div>

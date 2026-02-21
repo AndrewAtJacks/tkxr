@@ -1,6 +1,6 @@
 {
   "name": "tkxr-web",
-  "version": "1.0.0",
+  "version": "1.1.2",
   "private": true,
   "scripts": {
     "build": "vite build",
@@ -22,7 +22,6 @@
     "typescript": "^5.2.2",
     "vite": "^4.5.0"
   },
-  "dependencies": {
-  },
+  "dependencies": {},
   "type": "module"
 }

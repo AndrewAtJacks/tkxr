@@ -287,7 +287,7 @@ tkxr/
 
 #### Ticket (NDJSON)
 Each line is a JSON object:
-{"id":"tas-12AbCdEf","type":"task","title":"Implement user authentication","description":"Add user authentication system...","status":"progress","assignee":"usr-98XyZaBc","sprint":"spr-45FgHiJk","estimate":8,"priority":"high","createdAt":"2026-02-19T10:30:00.000Z","updatedAt":"2026-02-19T14:15:00.000Z"}
+{"id":"tas-12AbCdEfGh","type":"task","title":"Implement user authentication","description":"Add user authentication system...","status":"progress","assignee":"usr-98XyZaBc","sprint":"spr-45FgHiJk","estimate":8,"priority":"high","createdAt":"2026-02-19T10:30:00.000Z","updatedAt":"2026-02-19T14:15:00.000Z"}
 
 #### Sprint (JSON)
 {
@@ -311,7 +311,7 @@ Each line is a JSON object:
 }
 #### Comment (NDJSON)
 Each line is a JSON object:
-{"id":"com-1a2b3c4d","ticketId":"tas-12AbCdEf","author":"usr-98XyZaBc","content":"This is a comment","createdAt":"2026-02-19T12:00:00.000Z"}
+{"id":"com-1a2b3c4d","ticketId":"tas-12AbCdEfGh","author":"usr-98XyZaBc","content":"This is a comment","createdAt":"2026-02-19T12:00:00.000Z"}
 
 ## Advanced Usage
 # Comment workflows
@@ -455,6 +455,30 @@ tkxr mcp
 
 MIT License - see LICENSE file for details.
 
----
+## Changelog
 
-**tkxr** - Making ticket management simple, transparent, version-controlled, and AI-powered.
+See [CHANGELOG.md](CHANGELOG.md) for a detailed history of all notable changes.
+
+### Recent Highlights
+- Automated patch version bump and sync for root and web package.json on each build
+- Version badge in web UI now reflects actual package version
+- CLI command added for manual version bump and sync
+- Changelog is updated automatically with each build
+- Complete Sprint button bug fixed
+
+## Version Management
+
+### Automatic Patch Bump
+Every build automatically bumps the patch version and syncs both root and web package.json files. This is handled by the `scripts/bump-version.js` script, which also updates the changelog.
+
+### Manual Version Control
+You can manually bump the patch, minor, or major version using the CLI:
+
+```bash
+node dist/cli/index.js version --bump patch   # Patch bump
+node dist/cli/index.js version --bump minor   # Minor bump
+node dist/cli/index.js version --bump major   # Major bump
+node dist/cli/index.js version                # Show current version
+```
+
+Both methods keep the root and web package.json files in sync.

@@ -36,8 +36,8 @@ Thumbs.db
 *.tmp
 *.temp
 
-# Runtime config
-.tkxr-server
+# tkxr files (only if you don't want the repo to include them)
+tkxr/
 
 # Package manager lock files (optional - uncomment if you want to ignore)
 # package-lock.json

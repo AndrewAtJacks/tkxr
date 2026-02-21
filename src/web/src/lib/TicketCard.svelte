@@ -135,7 +135,7 @@
 		<h3 
 			id="ticket-title-{ticket.id}"
 			bind:this={titleElement}
-			class="font-semibold text-gray-900 dark:text-gray-100 flex-1{isExpanded ? '' : ' line-clamp-3'}"
+			class="font-semibold text-gray-900 dark:text-gray-100 flex-1 text-left{isExpanded ? '' : ' line-clamp-3'}"
 		>
 			{ticket.title}
 		</h3>
@@ -171,7 +171,7 @@
 	{#if ticket.description}
 		<p 
 			bind:this={descriptionElement}
-			class="text-sm text-gray-600 dark:text-gray-300 mb-1{isExpanded ? '' : ' line-clamp-3'}"
+			class="text-sm text-gray-600 dark:text-gray-300 mb-1 text-left{isExpanded ? '' : ' line-clamp-3'}"
 		>
 			{ticket.description}
 		</p>
@@ -197,7 +197,7 @@
 	{/if}
 
 	<!-- Metadata -->
-	<div id="ticket-content-{ticket.id}" class="space-y-2 mb-4" aria-label="Ticket metadata">
+	<div id="ticket-content-{ticket.id}" class="space-y-2 mb-4 text-left" aria-label="Ticket metadata">
 		{#if ticket.assignee}
 			<div class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
 				<User size={16} aria-hidden="true" />
@@ -278,7 +278,7 @@
 	</div>
 
 	<!-- Timestamp -->
-	<div class="text-xs text-gray-400 mt-2">
+	<div class="text-xs text-gray-400 mt-2 text-left">
 		Updated {new Date(ticket.updatedAt).toLocaleDateString()}
 	</div>
 </div>

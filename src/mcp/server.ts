@@ -11,19 +11,25 @@ import {
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
 const execAsync = promisify(exec);
 
-// Get the CLI path relative to the MCP server
-const CLI_PATH = path.join(process.cwd(), 'dist', 'cli', 'index.js');
+// Get the CLI path relative to the MCP server file location
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const CLI_PATH = path.join(__dirname, '..', 'cli', 'index.js');
 
 /**
  * TKXR MCP Server - Allows AI to manage tickets through CLI commands
  */
 class TKXRMCPServer {
   private server: Server;
+  private workingDir: string;
 
-  constructor() {
+  constructor(workingDir?: string) {
+    this.workingDir = workingDir || process.cwd();
     this.server = new Server(
       {
         name: 'tkxr-mcp',
@@ -321,7 +327,7 @@ class TKXRMCPServer {
 
   private async runCLI(command: string[]): Promise<string> {
     const cmd = `node "${CLI_PATH}" ${command.map(arg => `"${arg}"`).join(' ')}`;
-    const { stdout, stderr } = await execAsync(cmd, { cwd: process.cwd() });
+    const { stdout, stderr } = await execAsync(cmd, { cwd: this.workingDir });
     
     if (stderr && !stderr.includes('Warning')) {
       throw new Error(stderr);
@@ -496,8 +502,11 @@ class TKXRMCPServer {
 }
 
 // Start the server if this file is run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const server = new TKXRMCPServer();
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMainModule) {
+  // Accept working directory as first argument, default to current directory
+  const workingDir = process.argv[2] || process.cwd();
+  const server = new TKXRMCPServer(workingDir);
   server.run().catch((error) => {
     console.error('Failed to start TKXR MCP server:', error);
     process.exit(1);
