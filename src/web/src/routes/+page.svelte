@@ -20,14 +20,16 @@
 	import TicketCard from '../lib/TicketCard.svelte';
 	import KanbanBoard from '../lib/KanbanBoard.svelte';
 	import CreateTicketModal from '../lib/CreateTicketModal.svelte';
-	import ManageModal from '../lib/ManageModal.svelte';
+	import SprintManagementModal from '../lib/SprintManagementModal.svelte';
+	import UserManagementModal from '../lib/UserManagementModal.svelte';
 	import EditTicketModal from '../lib/EditTicketModal.svelte';
 	import CommentsModal from '../lib/CommentsModal.svelte';
 	import DarkModeToggle from '../lib/DarkModeToggle.svelte';
 	import { ticketStore, sprintStore, userStore } from '../lib/stores';
 
 	let showCreateModal = false;
-	let showManageModal = false;
+	let showSprintModal = false;
+	let showUserModal = false;
 	let showEditModal = false;
 	let showCommentsModal = false;
 	let editingTicket = null;
@@ -700,10 +702,18 @@
 		/>
 	{/if}
 
-	<!-- Manage Modal -->
-	{#if showManageModal}
-		<ManageModal 
-			on:close={() => showManageModal = false}
+	<!-- Sprint Management Modal -->
+	{#if showSprintModal}
+		<SprintManagementModal 
+			on:close={() => showSprintModal = false}
+			on:updated={loadData}
+		/>
+	{/if}
+
+	<!-- User Management Modal -->
+	{#if showUserModal}
+		<UserManagementModal 
+			on:close={() => showUserModal = false}
 			on:updated={loadData}
 		/>
 	{/if}
@@ -847,18 +857,30 @@
 			</button>
 		</div>
 
-		<!-- Manage Button -->
-		
-		<div>
-			<label for="drawer-manage-btn" class="label">
-				Users & Sprints
-			</label>
-			<button id="drawer-manage-btn" 
-			class="btn btn-secondary w-full flex items-center justify-center gap-2"
-			on:click={() => { showManageModal = true; showDrawer = false; }}
-		>
-			Manage
-		</button>
+		<!-- Management Buttons -->
+		<div class="space-y-3">
+			<div>
+				<label for="drawer-sprint-btn" class="label">
+					Sprint Management
+				</label>
+				<button id="drawer-sprint-btn" 
+					class="btn btn-secondary w-full flex items-center justify-center gap-2"
+					on:click={() => { showSprintModal = true; showDrawer = false; }}
+				>
+					Manage Sprints
+				</button>
+			</div>
+			<div>
+				<label for="drawer-user-btn" class="label">
+					User Management
+				</label>
+				<button id="drawer-user-btn" 
+					class="btn btn-secondary w-full flex items-center justify-center gap-2"
+					on:click={() => { showUserModal = true; showDrawer = false; }}
+				>
+					Manage Users
+				</button>
+			</div>
 		</div>
 	</div>
 </div>

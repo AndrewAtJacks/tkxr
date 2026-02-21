@@ -301,6 +301,47 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
+  app.put('/api/sprints/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, description, goal } = req.body;
+      
+      if (!name) {
+        return res.status(400).json({ error: 'Sprint name is required' });
+      }
+
+      const sprint = await storage.updateSprint(id, { name, description, goal });
+      
+      if (!sprint) {
+        return res.status(404).json({ error: 'Sprint not found' });
+      }
+
+      res.json(sprint);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to update sprint' });
+    }
+  });
+
+  app.put('/api/users/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { username, displayName, email } = req.body;
+      
+      if (!username || !displayName) {
+        return res.status(400).json({ error: 'Username and display name are required' });
+      }
+
+      const user = await storage.updateUser(id, { username, displayName, email });
+      
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      res.json(user);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to update user' });
+    }
+  });
   app.put('/api/sprints/:id/status', async (req, res) => {
     try {
       const { id } = req.params;

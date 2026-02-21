@@ -65,6 +65,16 @@ export class ProjectStorage {
     return true;
   }
 
+  async updateUser(id: string, updates: Partial<Pick<User, 'username' | 'displayName' | 'email'>>): Promise<User | null> {
+    const users = await this.getUsers();
+    const user = users.find(u => u.id === id);
+    if (!user) return null;
+    Object.assign(user, updates);
+    user.updatedAt = new Date();
+    await fs.writeFile(this.usersPath, JSON.stringify(users, null, 2), 'utf8');
+    return user;
+  }
+
   // Sprint CRUD
   async createSprint(name: string, options: Partial<Sprint> = {}): Promise<Sprint> {
     const now = new Date();
@@ -106,6 +116,16 @@ export class ProjectStorage {
     const sprint = sprints.find(s => s.id === id);
     if (!sprint) return null;
     sprint.status = status;
+    sprint.updatedAt = new Date();
+    await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
+    return sprint;
+  }
+
+  async updateSprint(id: string, updates: Partial<Pick<Sprint, 'name' | 'description' | 'goal'>>): Promise<Sprint | null> {
+    const sprints = await this.getSprints();
+    const sprint = sprints.find(s => s.id === id);
+    if (!sprint) return null;
+    Object.assign(sprint, updates);
     sprint.updatedAt = new Date();
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
     return sprint;
