@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.1.8] - 2026-02-22
+## [1.1.10] - 2026-02-22
 ### Added
 - Open Tasks stat button to top row dashboard
 - Sprint accordion view grouped by status (Planning, Active, Completed)
@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Status button compression issues on smaller screens
 - Spacebar closing comments modal while typing
+- Newly created task tickets not filling full width of kanban lane
 
 ## [1.1.2] - 2026-02-21
 ### Changed
