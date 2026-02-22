@@ -231,8 +231,9 @@
 	{/if}
 
 	<!-- Status & Actions -->
-	<div class="flex items-center justify-between">
-		<div class="flex items-center gap-2">
+	<div class="flex items-center justify-between gap-2">
+		<!-- Status icon and label - hidden on small screens -->
+		<div class="hidden sm:flex items-center gap-2">
 			<svelte:component 
 				this={currentStatus.icon} 
 				size={16} 
@@ -243,37 +244,47 @@
 			</span>
 		</div>
 
-		<!-- Quick Status Updates -->
-		<div class="flex gap-1">
-			{#if ticket.status !== 'todo'}
+		<!-- Status Button Group - full width on small screens, auto width on larger screens -->
+		<div class="flex-1 sm:flex-initial">
+			<div class="inline-flex w-full sm:w-auto rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden" role="group" aria-label="Update ticket status">
 				<button 
-					class="p-1.5 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+					class="flex-1 sm:flex-initial px-3 py-1.5 text-xs font-medium transition-colors
+						{ticket.status === 'todo' 
+							? 'bg-gray-200 text-gray-900 dark:bg-gray-600 dark:text-gray-100' 
+							: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'} 
+						border-r border-gray-300 dark:border-gray-600"
 					title="Mark as To Do"
+					aria-pressed={ticket.status === 'todo'}
 					on:click={() => updateStatus('todo')}
 				>
-					<Clock size={16} />
+					To Do
 				</button>
-			{/if}
-			
-			{#if ticket.status !== 'progress'}
+				
 				<button 
-					class="p-1.5 rounded text-yellow-400 hover:text-yellow-600 hover:bg-yellow-50"
+					class="flex-1 sm:flex-initial px-3 py-1.5 text-xs font-medium transition-colors
+						{ticket.status === 'progress' 
+							? 'bg-yellow-200 text-yellow-900 dark:bg-yellow-700 dark:text-yellow-100' 
+							: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'} 
+						border-r border-gray-300 dark:border-gray-600"
 					title="Mark as In Progress"
+					aria-pressed={ticket.status === 'progress'}
 					on:click={() => updateStatus('progress')}
 				>
-					<Clock size={16} />
+					In Progress
 				</button>
-			{/if}
-			
-			{#if ticket.status !== 'done'}
+				
 				<button 
-					class="p-1.5 rounded text-green-400 hover:text-green-600 hover:bg-green-50"
+					class="flex-1 sm:flex-initial px-3 py-1.5 text-xs font-medium transition-colors
+						{ticket.status === 'done' 
+							? 'bg-green-200 text-green-900 dark:bg-green-700 dark:text-green-100' 
+							: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}"
 					title="Mark as Done"
+					aria-pressed={ticket.status === 'done'}
 					on:click={() => updateStatus('done')}
 				>
-					<Done size={16} />
+					Done
 				</button>
-			{/if}
+			</div>
 		</div>
 	</div>
 

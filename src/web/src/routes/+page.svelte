@@ -632,7 +632,7 @@
 	</header>
 
 	<!-- Stats -->
-	<section class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8" aria-labelledby="ticket-stats-title">
+	<section class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8" aria-labelledby="ticket-stats-title">
 		<h2 id="ticket-stats-title" class="sr-only">Ticket Statistics</h2>
 		<button 
 			class="card hover:shadow-lg transition-shadow cursor-pointer text-left w-full"
@@ -648,6 +648,24 @@
 				<div>
 					<p class="text-2xl font-bold">{sprintFilteredTickets.length}</p>
 					<p class="text-gray-600 dark:text-gray-400">Total Tickets</p>
+				</div>
+			</div>
+		</button>
+
+		<button 
+			class="card hover:shadow-lg transition-shadow cursor-pointer text-left w-full"
+			on:click={() => { activeTab = 'open-tasks'; viewMode = 'grid'; }}
+			title="View open tasks"
+			aria-label="View open tasks: {sprintFilteredTickets.filter(t => t.type === 'task' && t.status !== 'done').length} total"
+			aria-pressed={activeTab === 'open-tasks'}
+		>
+			<div class="flex items-center gap-3">
+				<div class="p-2 bg-purple-100 dark:bg-purple-800 rounded-lg" aria-hidden="true">
+					<CheckSquare class="w-6 h-6 text-purple-600 dark:text-purple-300" />
+				</div>
+				<div>
+					<p class="text-2xl font-bold">{sprintFilteredTickets.filter(t => t.type === 'task' && t.status !== 'done').length}</p>
+					<p class="text-gray-600 dark:text-gray-400">Open Tasks</p>
 				</div>
 			</div>
 		</button>

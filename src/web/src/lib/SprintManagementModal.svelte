@@ -309,13 +309,44 @@
 											{/if}
 										</div>
 										<div class="flex items-center gap-2 flex-shrink-0">
+										<!-- Status Button Group -->
+										<div class="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden" role="group" aria-label="Update sprint status">
 											<button
-												class="btn text-sm px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
-												on:click={() => updateSprintStatus(sprint.id, 'active')}
-												title="Start Sprint"
+												class="px-3 py-1.5 text-xs font-medium transition-colors
+													{sprint.status === 'planning'
+														? 'bg-gray-200 text-gray-900 dark:bg-gray-600 dark:text-gray-100'
+														: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}
+													border-r border-gray-300 dark:border-gray-600"
+												title="Set to Planning"
+												aria-pressed={sprint.status === 'planning'}
+												on:click={() => updateSprintStatus(sprint.id, 'planning')}
 											>
-												Start
+												Planning
 											</button>
+											<button
+												class="px-3 py-1.5 text-xs font-medium transition-colors
+													{sprint.status === 'active'
+														? 'bg-blue-200 text-blue-900 dark:bg-blue-700 dark:text-blue-100'
+														: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}
+													border-r border-gray-300 dark:border-gray-600"
+												title="Set to Active"
+												aria-pressed={sprint.status === 'active'}
+												on:click={() => updateSprintStatus(sprint.id, 'active')}
+											>
+												Active
+											</button>
+											<button
+												class="px-3 py-1.5 text-xs font-medium transition-colors
+													{sprint.status === 'completed'
+														? 'bg-green-200 text-green-900 dark:bg-green-700 dark:text-green-100'
+														: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}"
+												title="Set to Completed"
+												aria-pressed={sprint.status === 'completed'}
+												on:click={() => updateSprintStatus(sprint.id, 'completed')}
+											>
+												Completed
+											</button>
+										</div>
 											<button
 												class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/50 rounded"
 												on:click={() => startEditing(sprint)}
@@ -369,13 +400,44 @@
 											{/if}
 										</div>
 										<div class="flex items-center gap-2 flex-shrink-0">
+										<!-- Status Button Group -->
+										<div class="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden" role="group" aria-label="Update sprint status">
 											<button
-												class="btn text-sm px-3 py-1.5 bg-green-600 text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
-												on:click={() => updateSprintStatus(sprint.id, 'completed')}
-												title="Complete Sprint"
+												class="px-3 py-1.5 text-xs font-medium transition-colors
+													{sprint.status === 'planning'
+														? 'bg-gray-200 text-gray-900 dark:bg-gray-600 dark:text-gray-100'
+														: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}
+													border-r border-gray-300 dark:border-gray-600"
+												title="Set to Planning"
+												aria-pressed={sprint.status === 'planning'}
+												on:click={() => updateSprintStatus(sprint.id, 'planning')}
 											>
-												Complete
+												Planning
 											</button>
+											<button
+												class="px-3 py-1.5 text-xs font-medium transition-colors
+													{sprint.status === 'active'
+														? 'bg-blue-200 text-blue-900 dark:bg-blue-700 dark:text-blue-100'
+														: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}
+													border-r border-gray-300 dark:border-gray-600"
+												title="Set to Active"
+												aria-pressed={sprint.status === 'active'}
+												on:click={() => updateSprintStatus(sprint.id, 'active')}
+											>
+												Active
+											</button>
+											<button
+												class="px-3 py-1.5 text-xs font-medium transition-colors
+													{sprint.status === 'completed'
+														? 'bg-green-200 text-green-900 dark:bg-green-700 dark:text-green-100'
+														: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}"
+												title="Set to Completed"
+												aria-pressed={sprint.status === 'completed'}
+												on:click={() => updateSprintStatus(sprint.id, 'completed')}
+											>
+												Completed
+											</button>
+										</div>
 											<button
 												class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/50 rounded"
 												on:click={() => startEditing(sprint)}
@@ -429,13 +491,44 @@
 											{/if}
 										</div>
 										<div class="flex items-center gap-2 flex-shrink-0">
+										<!-- Status Button Group -->
+										<div class="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden" role="group" aria-label="Update sprint status">
 											<button
-												class="btn text-sm px-3 py-1.5 bg-yellow-600 text-white hover:bg-yellow-700 dark:bg-yellow-500 dark:hover:bg-yellow-600"
-												on:click={() => updateSprintStatus(sprint.id, 'active')}
-												title="Reopen Sprint"
+												class="px-3 py-1.5 text-xs font-medium transition-colors
+													{sprint.status === 'planning'
+														? 'bg-gray-200 text-gray-900 dark:bg-gray-600 dark:text-gray-100'
+														: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}
+													border-r border-gray-300 dark:border-gray-600"
+												title="Set to Planning"
+												aria-pressed={sprint.status === 'planning'}
+												on:click={() => updateSprintStatus(sprint.id, 'planning')}
 											>
-												Reopen
+												Planning
 											</button>
+											<button
+												class="px-3 py-1.5 text-xs font-medium transition-colors
+													{sprint.status === 'active'
+														? 'bg-blue-200 text-blue-900 dark:bg-blue-700 dark:text-blue-100'
+														: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}
+													border-r border-gray-300 dark:border-gray-600"
+												title="Set to Active"
+												aria-pressed={sprint.status === 'active'}
+												on:click={() => updateSprintStatus(sprint.id, 'active')}
+											>
+												Active
+											</button>
+											<button
+												class="px-3 py-1.5 text-xs font-medium transition-colors
+													{sprint.status === 'completed'
+														? 'bg-green-200 text-green-900 dark:bg-green-700 dark:text-green-100'
+														: 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}"
+												title="Set to Completed"
+												aria-pressed={sprint.status === 'completed'}
+												on:click={() => updateSprintStatus(sprint.id, 'completed')}
+											>
+												Completed
+											</button>
+										</div>
 											<button
 												class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/50 rounded"
 												on:click={() => startEditing(sprint)}
