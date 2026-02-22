@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - Status button compression issues on smaller screens
+- Spacebar closing comments modal while typing
 
 ## [1.1.2] - 2026-02-21
 ### Changed
