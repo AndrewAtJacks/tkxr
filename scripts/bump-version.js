@@ -77,10 +77,8 @@ try {
   }
 
   // After version bump, re-read updated package.json and copy to dist/
-  const updatedRootPkg = JSON.parse(readFileSync(rootPkgPath, 'utf8'));
-  const distPkgPath = join(__dirname, '..', 'dist', 'package.json');
-  writeFileSync(distPkgPath, JSON.stringify(updatedRootPkg, null, 2) + '\n', 'utf8');
-  console.log('   ✓ Copied updated package.json to dist/')
+  // After version bump, do NOT automatically copy package.json to dist.
+  // Copying is handled by the build process to keep bump and build decoupled.
 } catch (error) {
   console.error('❌ Error bumping version:', error.message);
   process.exit(1);

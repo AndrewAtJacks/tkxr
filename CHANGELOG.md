@@ -2,11 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.1.14] - 2026-02-22
+## [1.1.15] - 2026-02-22
+### Added
+- `bump` script: `pnpm run bump` to explicitly increment project versions.
+- `scripts/copy-package-to-dist.js` to copy the root `package.json` into `dist` as part of the build.
+
 ### Changed
-- Bumped package version to `1.1.14`.
+- Removed the `prebuild` lifecycle hook so builds no longer auto-run the bump script.
+- `build` now executes the package copy script to populate `dist/package.json` after building assets.
+- `scripts/bump-version.js` no longer writes `dist/package.json`; bumping and copying are decoupled.
+
 ### Fixed
-- Release includes fixes to `serve` behavior reading `dist/package.json` and serving static assets from `dist/web`.
+- Prevent accidental automatic version increments during `pnpm run build`; ensures `dist/package.json` reflects the root package after build.
 
 ## [1.1.13] - 2026-02-22
 ### Changed

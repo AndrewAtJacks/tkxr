@@ -1,6 +1,6 @@
 {
   "name": "@legdev/tkxr",
-  "version": "1.1.14",
+  "version": "1.1.15",
   "description": "In-repo ticket management system with CLI and web interface",
   "keywords": [
     "tickets",
@@ -22,8 +22,8 @@
     "README.md"
   ],
   "scripts": {
-    "prebuild": "node scripts/bump-version.js",
-    "build": "pnpm run build:cli && pnpm run --filter tkxr-web build",
+    "bump": "node scripts/bump-version.js",
+    "build": "pnpm run build:cli && pnpm run --filter tkxr-web build && node scripts/copy-package-to-dist.js",
     "build:cli": "tsc",
     "build:web": "pnpm run --filter tkxr-web build",
     "dev": "tsc --watch",
