@@ -217,7 +217,7 @@
 	.kanban-column {
 		flex: 1;
 		min-width: 280px;
-		max-width: 400px;
+
 		min-height: 500px;
 		transition: all 0.2s ease-in-out;
 	}

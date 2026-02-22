@@ -17,6 +17,7 @@ import { listSprints } from './commands/sprints.js';
 import { manageSprint } from './commands/sprint.js';
 import { startMCPServer } from './commands/mcp.js';
 import { manageComments } from './commands/comments.js';
+import { manageVersion } from './commands/version.js';
 
 interface Args extends minimist.ParsedArgs {
   _: string[];
@@ -37,6 +38,7 @@ const commands = {
   sprint: manageSprint,
   comments: manageComments,
   mcp: startMCPServer,
+  version: manageVersion,
   new: createTicket, // Alias for create
 };
 
@@ -81,6 +83,10 @@ function showHelp() {
   console.log('      --port <number>       Server port (default: 8080)');
   console.log('      --host <string>       Server host (default: localhost)');
   console.log('  mcp                       Start MCP server for AI integration');
+  console.log();
+  console.log(chalk.green('Version Commands:'));
+  console.log('  version                   Show current version');
+  console.log('  version --bump <type>     Bump version (patch, minor, major)');
   console.log();
   console.log(chalk.green('Examples:'));
   console.log('  tkxr new task "Fix login bug"');

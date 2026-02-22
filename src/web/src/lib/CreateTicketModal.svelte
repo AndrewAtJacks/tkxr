@@ -92,12 +92,10 @@ export let defaultAssignee = ''; // Default user ID to assign new tickets to
 
 	// Focus management for accessibility
 	onMount(() => {
-		// Focus first focusable element when modal opens
-		const focusableElements = modalElement?.querySelectorAll(
-			'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-		);
-		if (focusableElements && focusableElements.length > 0) {
-			(focusableElements[0] as HTMLElement).focus();
+		// Focus first input field when modal opens (not buttons, to prevent spacebar closing)
+		const firstInput = modalElement?.querySelector('input, textarea') as HTMLElement;
+		if (firstInput) {
+			firstInput.focus();
 		}
 	});
 </script>
@@ -111,16 +109,9 @@ export let defaultAssignee = ''; // Default user ID to assign new tickets to
 	aria-modal="true"
 	aria-labelledby="modal-title"
 	aria-describedby="modal-description"
+	on:click={(e) => { if (e.target === e.currentTarget) handleClose(); }}
+	on:keydown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) handleClose(); }}
 >
-	<!-- Backdrop close button for accessibility -->
-	<button
-		type="button"
-		class="absolute inset-0 w-full h-full bg-transparent border-0 p-0 m-0 cursor-pointer"
-		tabindex="0"
-		aria-label="Close modal"
-		on:click={handleClose}
-		style="z-index:51;"
-	></button>
 	<!-- Modal -->
 	<div 
 		bind:this={modalElement}
