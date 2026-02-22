@@ -2,7 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.14] - 2026-02-22
+### Changed
+- Bumped package version to `1.1.14`.
+### Fixed
+- Release includes fixes to `serve` behavior reading `dist/package.json` and serving static assets from `dist/web`.
+
 ## [1.1.13] - 2026-02-22
+### Changed
+ - CLI now reads version from dist/package.json for npm deployment
+ - Build script copies updated package.json to dist/ after version bump
+ - Package is now fully self-sufficient for CLI and web deployment
 ### Changed
 - CLI now reads version from dist/package.json for npm deployment
 - Build script copies updated package.json to dist/ after version bump

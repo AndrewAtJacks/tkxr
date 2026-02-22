@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { promises as fs, unlinkSync } from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { createStorage } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
 
@@ -23,15 +24,58 @@ export async function startServer(args: ServeArgs): Promise<void> {
   
   const storage = await createStorage();
 
-  // Read version from dist/package.json
+  // Ensure the process is running from the appropriate `dist` directory so relative
+  // paths to `package.json` and the `web` assets resolve correctly.
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+
+    // Candidate: dist directory in the project root and adjacent to this module when installed
+    const projectDist = path.join(process.cwd(), 'dist');
+    const moduleDist = path.join(__dirname, '..', '..', '..', 'dist');
+
+    // Prefer the project's dist (development) first, fall back to module dist (installed)
+    try {
+      await fs.access(projectDist);
+      process.chdir(projectDist);
+      console.debug('Changed cwd to project dist:', projectDist);
+    } catch (errProject) {
+      try {
+        await fs.access(moduleDist);
+        process.chdir(moduleDist);
+        console.debug('Changed cwd to module dist:', moduleDist);
+      } catch (errModule) {
+        // No dist found; continue using existing cwd
+      }
+    }
+  } catch (err) {
+    // Non-fatal; best effort only
+    console.debug('Could not change cwd to dist:', err);
+  }
+
+  // Read version from package.json in current working directory first (so project dist is preferred)
   let version = '1.0.0'; // fallback
   try {
-    const pkgPath = path.join(process.cwd(), 'dist', 'package.json');
-    const pkgContent = await fs.readFile(pkgPath, 'utf8');
-    const pkg = JSON.parse(pkgContent);
-    version = pkg.version || '1.0.0';
+    const cwdPkg = path.join(process.cwd(), 'package.json');
+    try {
+      const pkgContent = await fs.readFile(cwdPkg, 'utf8');
+      const pkg = JSON.parse(pkgContent);
+      version = pkg.version || version;
+    } catch (errCwdPkg) {
+      // Fallback: attempt to read package.json relative to this module (installed package)
+      try {
+        const __filename = fileURLToPath(import.meta.url);
+        const __dirname = path.dirname(__filename);
+        const pkgPath = path.join(__dirname, '..', '..', '..', 'package.json');
+        const pkgContent = await fs.readFile(pkgPath, 'utf8');
+        const pkg = JSON.parse(pkgContent);
+        version = pkg.version || version;
+      } catch (error) {
+        console.debug('Could not read package.json version from module or cwd:', error);
+      }
+    }
   } catch (error) {
-    console.debug('Could not read dist/package.json version:', error);
+    console.debug('Could not read package.json version:', error);
   }
 
   // Update notifier URL for this server instance
@@ -50,7 +94,8 @@ export async function startServer(args: ServeArgs): Promise<void> {
 
   // Middleware
   app.use(express.json());
-  app.use(express.static(path.join(process.cwd(), 'dist', 'web')));
+  // Serve static assets from the `web` folder inside `dist` (we may have chdir'd to dist)
+  app.use(express.static(path.join(process.cwd(), 'web')));
 
   // API Routes
   app.get('/api/tickets', async (req, res) => {
@@ -532,7 +577,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
 
   // Serve web app for all other routes
   app.get('*', (req, res) => {
-    res.sendFile(path.join(process.cwd(), 'dist', 'web', 'index.html'));
+    res.sendFile(path.join(process.cwd(), 'web', 'index.html'));
   });
 
   // WebSocket connection handling
