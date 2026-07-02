@@ -14,8 +14,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "tkxr": "./dist/cli/index.js",
-    "tkxr-mcp": "./dist/mcp/server.js"
+    "tkxr": "dist/cli/index.js",
+    "tkxr-mcp": "dist/mcp/server.js"
   },
   "files": [
     "dist/**/*",
