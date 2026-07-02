@@ -22,28 +22,28 @@ You do not need to install tkxr globally. Run any command directly using pnpm dl
 
 ```bash
 # Using pnpm dlx
-pnpm dlx tkxr serve         # Start the web interface
-pnpm dlx tkxr mcp           # Start the MCP server
-pnpm dlx tkxr list          # List tickets
-pnpm dlx tkxr create task "Title"  # Create a task
-pnpm dlx tkxr comments <ticket-id>  # Manage comments
+pnpm dlx @legdev/tkxr serve                 # Start the web interface
+pnpm dlx @legdev/tkxr mcp                   # Start the MCP server
+pnpm dlx @legdev/tkxr list                  # List tickets
+pnpm dlx @legdev/tkxr create task "Title"   # Create a task
+pnpm dlx @legdev/tkxr comments <ticket-id>  # Manage comments
 
 # Using npx
-npx tkxr serve              # Start the web interface
-npx tkxr mcp                # Start the MCP server
-npx tkxr list               # List tickets
-npx tkxr create task "Title"       # Create a task
-npx tkxr comments <ticket-id>      # Manage comments
+npx @legdev/tkxr serve                      # Start the web interface
+npx @legdev/tkxr mcp                        # Start the MCP server
+npx @legdev/tkxr list                       # List tickets
+npx @legdev/tkxr create task "Title"        # Create a task
+npx @legdev/tkxr comments <ticket-id>       # Manage comments
 ```
 
 Global install is optional:
 
 ```bash
-pnpm install -g tkxr
+pnpm install -g @legdev/tkxr
 ```
 
 ## Quick Start
-> **Human users:** Use the web UI for all ticket management, sprint planning, and user interactions. Open http://localhost:8080 after running `pnpm dlx tkxr serve`.
+> **Human users:** Use the web UI for all ticket management, sprint planning, and user interactions. Open http://localhost:8080 after running `pnpm dlx @legdev/tkxr serve`.
 > **AI/automation:** Use the CLI or MCP server for programmatic access, scripting, and integration with AI tools.
 
 ### 1. Create your first tickets and comments
@@ -181,9 +181,9 @@ tkxr includes a Model Context Protocol (MCP) server that enables AI assistants t
 ### Starting the MCP Server
 
 ```bash
-npx tkxr mcp           # If not installed globally
-pnpm dlx tkxr mcp      # Or use pnpm dlx
-tkxr mcp               # Only if installed globally
+npx @legdev/tkxr mcp           # If not installed globally
+pnpm dlx @legdev/tkxr mcp      # Or use pnpm dlx
+tkxr mcp                       # Only if installed globally
 ```
 
 ### Available MCP Tools
@@ -211,7 +211,9 @@ With the MCP server running, AI assistants can:
 
 ### MCP Configuration
 
-Configure your AI assistant to connect to the MCP server:
+Configure your AI assistant to connect to the MCP server.
+
+Global install (uses the `tkxr-mcp` bin):
 
 ```json
 {
@@ -219,6 +221,19 @@ Configure your AI assistant to connect to the MCP server:
     "tkxr": {
       "command": "tkxr-mcp",
       "args": []
+    }
+  }
+}
+```
+
+No global install (via `pnpm dlx`):
+
+```json
+{
+  "mcpServers": {
+    "tkxr": {
+      "command": "pnpm",
+      "args": ["dlx", "@legdev/tkxr", "mcp"]
     }
   }
 }
@@ -413,7 +428,7 @@ TKXR_PORT=8080
 You can override the web UI port by editing `.env.tkxr`, using CLI flags:
 
 ```bash
-pnpm dlx tkxr serve --port 3000
+pnpm dlx @legdev/tkxr serve --port 3000
 ```
 ### Development
 

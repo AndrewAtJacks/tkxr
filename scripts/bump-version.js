@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -24,32 +23,26 @@ function updatePackageVersion(filePath, newVersion) {
   pkg.version = newVersion;
   writeFileSync(filePath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
   return oldVersion;
-    // After bumping version, call updateChangelog
-    updateChangelog(newVersion);
+}
 
-  const fs = require('fs');
-  const path = require('path');
-
-  function updateChangelog(newVersion) {
-    const changelogPath = path.join(__dirname, '..', 'CHANGELOG.md');
-    const date = new Date().toISOString().split('T')[0];
-    const entry = `\n## [${newVersion}] - ${date}\n### Changed\n- Patch version bumped automatically during build.\n`;
-    let changelog = '';
-    if (fs.existsSync(changelogPath)) {
-      changelog = fs.readFileSync(changelogPath, 'utf8');
-      // Insert after the first heading
-      const headingIdx = changelog.indexOf('# Changelog');
-      if (headingIdx !== -1) {
-        const afterHeadingIdx = changelog.indexOf('\n', headingIdx);
-        changelog = changelog.slice(0, afterHeadingIdx + 1) + entry + changelog.slice(afterHeadingIdx + 1);
-      } else {
-        changelog = entry + changelog;
-      }
+function updateChangelog(newVersion) {
+  const changelogPath = join(__dirname, '..', 'CHANGELOG.md');
+  const date = new Date().toISOString().split('T')[0];
+  const entry = `\n## [${newVersion}] - ${date}\n### Changed\n- Patch version bumped automatically during build.\n`;
+  let changelog = '';
+  if (existsSync(changelogPath)) {
+    changelog = readFileSync(changelogPath, 'utf8');
+    const headingIdx = changelog.indexOf('# Changelog');
+    if (headingIdx !== -1) {
+      const afterHeadingIdx = changelog.indexOf('\n', headingIdx);
+      changelog = changelog.slice(0, afterHeadingIdx + 1) + entry + changelog.slice(afterHeadingIdx + 1);
     } else {
-      changelog = `# Changelog\n${entry}`;
+      changelog = entry + changelog;
     }
-    fs.writeFileSync(changelogPath, changelog);
+  } else {
+    changelog = `# Changelog\n${entry}`;
   }
+  writeFileSync(changelogPath, changelog);
 }
 
 try {
@@ -76,9 +69,15 @@ try {
     console.log('   ⚠️  Could not update web package.json');
   }
 
-  // After version bump, re-read updated package.json and copy to dist/
-  // After version bump, do NOT automatically copy package.json to dist.
-  // Copying is handled by the build process to keep bump and build decoupled.
+  // Append changelog entry for the new version
+  try {
+    updateChangelog(newVersion);
+    console.log('   ✓ Updated CHANGELOG.md');
+  } catch (error) {
+    console.log('   ⚠️  Could not update CHANGELOG.md');
+  }
+
+  // Copying dist/package.json is handled by the build process to keep bump and build decoupled.
 } catch (error) {
   console.error('❌ Error bumping version:', error.message);
   process.exit(1);

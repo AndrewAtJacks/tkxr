@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.16] - 2026-07-02
+### Fixed
+- MCP server no longer writes chalk-colored startup banner to stdout, which corrupted the JSON-RPC stream and caused AI tool calls (e.g. `create_ticket`) to fail when the server was launched via `pnpm dlx @legdev/tkxr mcp`. Banner is now written to stderr.
+- `scripts/bump-version.js`: `updateChangelog` was defined after an early `return` inside `updatePackageVersion` and never ran; it is now hoisted to module scope and called from the main flow, so `pnpm run bump` actually appends a CHANGELOG entry.
+
+### Docs
+- README: replaced `pnpm dlx tkxr ...` / `npx tkxr ...` / `pnpm install -g tkxr` invocations with the scoped `@legdev/tkxr` name published to npm.
+- README: added an MCP configuration example for `pnpm dlx`-based setups.
+
 ## [1.1.15] - 2026-02-22
 ### Added
 - `bump` script: `pnpm run bump` to explicitly increment project versions.
