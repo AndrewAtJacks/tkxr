@@ -90,6 +90,27 @@ export class NotificationClient {
   }
 
   /**
+   * Notify server that a user was updated
+   */
+  async notifyUserUpdated(user: any): Promise<void> {
+    await this.notify('/api/cli-notifications/user-updated', user);
+  }
+
+  /**
+   * Notify server that a user was deleted
+   */
+  async notifyUserDeleted(id: string): Promise<void> {
+    await this.notify('/api/cli-notifications/user-deleted', { id });
+  }
+
+  /**
+   * Notify server that a sprint was deleted
+   */
+  async notifySprintDeleted(id: string): Promise<void> {
+    await this.notify('/api/cli-notifications/sprint-deleted', { id });
+  }
+
+  /**
    * Notify server that a comment was created
    */
   async notifyCommentCreated(comment: any): Promise<void> {

@@ -277,6 +277,123 @@ class TKXRMCPServer {
               required: ['ticketId', 'author', 'content'],
             },
           },
+          {
+            name: 'delete_comment',
+            description: 'Delete a comment from a ticket',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                ticketId: { type: 'string', description: 'Ticket ID the comment belongs to' },
+                commentId: { type: 'string', description: 'Comment ID to delete' },
+              },
+              required: ['ticketId', 'commentId'],
+            },
+          },
+          {
+            name: 'edit_ticket',
+            description: 'Edit ticket fields (title, description, priority, estimate, labels). Any provided field is updated.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Ticket ID' },
+                title: { type: 'string', description: 'New title (optional)' },
+                description: { type: 'string', description: 'New description (optional)' },
+                priority: {
+                  type: 'string',
+                  enum: ['low', 'medium', 'high', 'critical'],
+                  description: 'Priority level (optional)',
+                },
+                estimate: { type: 'number', description: 'Story points (optional)' },
+                addLabels: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Labels to add (optional)',
+                },
+                removeLabels: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Labels to remove (optional)',
+                },
+                clearLabels: { type: 'boolean', description: 'Remove all labels (optional)' },
+                clearDescription: { type: 'boolean', description: 'Clear description (optional)' },
+                clearPriority: { type: 'boolean', description: 'Clear priority (optional)' },
+                clearEstimate: { type: 'boolean', description: 'Clear estimate (optional)' },
+              },
+              required: ['id'],
+            },
+          },
+          {
+            name: 'assign_ticket',
+            description: 'Assign a ticket to a user, or unassign it',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Ticket ID' },
+                user: { type: 'string', description: 'User ID or username (omit if unassigning)' },
+                unassign: { type: 'boolean', description: 'Clear the ticket assignee' },
+              },
+              required: ['id'],
+            },
+          },
+          {
+            name: 'set_ticket_sprint',
+            description: 'Attach a ticket to a sprint, or remove it',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Ticket ID' },
+                sprintId: { type: 'string', description: 'Sprint ID (omit if unsetting)' },
+                unset: { type: 'boolean', description: 'Remove the ticket from its sprint' },
+              },
+              required: ['id'],
+            },
+          },
+          {
+            name: 'edit_sprint',
+            description: 'Edit sprint fields (name, description, goal, start/end dates)',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Sprint ID' },
+                name: { type: 'string', description: 'New name (optional)' },
+                description: { type: 'string', description: 'New description (optional)' },
+                goal: { type: 'string', description: 'New goal (optional)' },
+                startDate: { type: 'string', description: 'ISO date (optional)' },
+                endDate: { type: 'string', description: 'ISO date (optional)' },
+                clearDescription: { type: 'boolean' },
+                clearGoal: { type: 'boolean' },
+                clearStartDate: { type: 'boolean' },
+                clearEndDate: { type: 'boolean' },
+              },
+              required: ['id'],
+            },
+          },
+          {
+            name: 'edit_user',
+            description: 'Edit user fields (username, displayName, email)',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                ref: { type: 'string', description: 'User ID or username' },
+                username: { type: 'string', description: 'New username (optional)' },
+                displayName: { type: 'string', description: 'New display name (optional)' },
+                email: { type: 'string', description: 'New email (optional)' },
+                clearEmail: { type: 'boolean', description: 'Clear email (optional)' },
+              },
+              required: ['ref'],
+            },
+          },
+          {
+            name: 'delete_entity',
+            description: 'Delete any entity (sprint, user, or comment) by ID. For tickets prefer delete_ticket.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Entity ID' },
+              },
+              required: ['id'],
+            },
+          },
         ],
       };
     });
@@ -309,6 +426,20 @@ class TKXRMCPServer {
             return await this.listComments(args);
           case 'add_comment':
             return await this.addComment(args);
+          case 'delete_comment':
+            return await this.deleteComment(args);
+          case 'edit_ticket':
+            return await this.editTicket(args);
+          case 'assign_ticket':
+            return await this.assignTicket(args);
+          case 'set_ticket_sprint':
+            return await this.setTicketSprint(args);
+          case 'edit_sprint':
+            return await this.editSprint(args);
+          case 'edit_user':
+            return await this.editUser(args);
+          case 'delete_entity':
+            return await this.deleteEntity(args);
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -385,7 +516,7 @@ class TKXRMCPServer {
   }
 
   private async deleteTicket(args: any) {
-    const command = ['delete', args.id];
+    const command = ['delete', args.id, '--force'];
     const output = await this.runCLI(command);
     return {
       content: [
@@ -493,6 +624,90 @@ class TKXRMCPServer {
         },
       ],
     };
+  }
+
+  private async deleteComment(args: any) {
+    const command = ['comments', args.ticketId, '--delete', args.commentId];
+    const output = await this.runCLI(command);
+    return { content: [{ type: 'text', text: output }] };
+  }
+
+  private async editTicket(args: any) {
+    const command: string[] = ['edit', args.id];
+    if (args.title !== undefined) command.push('--title', args.title);
+    if (args.description !== undefined) command.push('--description', args.description);
+    if (args.priority !== undefined) command.push('--priority', args.priority);
+    if (args.estimate !== undefined) command.push('--estimate', String(args.estimate));
+    if (Array.isArray(args.addLabels)) {
+      for (const l of args.addLabels) command.push('--add-label', l);
+    }
+    if (Array.isArray(args.removeLabels)) {
+      for (const l of args.removeLabels) command.push('--remove-label', l);
+    }
+    if (args.clearLabels) command.push('--clear-labels');
+    if (args.clearDescription) command.push('--clear-description');
+    if (args.clearPriority) command.push('--clear-priority');
+    if (args.clearEstimate) command.push('--clear-estimate');
+
+    const output = await this.runCLI(command);
+    return { content: [{ type: 'text', text: output }] };
+  }
+
+  private async assignTicket(args: any) {
+    const command: string[] = ['user', 'assign', args.id];
+    if (args.unassign) {
+      command.push('--unassign');
+    } else if (args.user) {
+      command.push(args.user);
+    } else {
+      throw new Error('assign_ticket: provide "user" or set "unassign": true');
+    }
+    const output = await this.runCLI(command);
+    return { content: [{ type: 'text', text: output }] };
+  }
+
+  private async setTicketSprint(args: any) {
+    const command: string[] = ['sprint', 'set', args.id];
+    if (args.unset) {
+      command.push('--unset');
+    } else if (args.sprintId) {
+      command.push(args.sprintId);
+    } else {
+      throw new Error('set_ticket_sprint: provide "sprintId" or set "unset": true');
+    }
+    const output = await this.runCLI(command);
+    return { content: [{ type: 'text', text: output }] };
+  }
+
+  private async editSprint(args: any) {
+    const command: string[] = ['sprint', 'edit', args.id];
+    if (args.name !== undefined) command.push('--name', args.name);
+    if (args.description !== undefined) command.push('--description', args.description);
+    if (args.goal !== undefined) command.push('--goal', args.goal);
+    if (args.startDate !== undefined) command.push('--start-date', args.startDate);
+    if (args.endDate !== undefined) command.push('--end-date', args.endDate);
+    if (args.clearDescription) command.push('--clear-description');
+    if (args.clearGoal) command.push('--clear-goal');
+    if (args.clearStartDate) command.push('--clear-start-date');
+    if (args.clearEndDate) command.push('--clear-end-date');
+    const output = await this.runCLI(command);
+    return { content: [{ type: 'text', text: output }] };
+  }
+
+  private async editUser(args: any) {
+    const command: string[] = ['user', 'edit', args.ref];
+    if (args.username !== undefined) command.push('--username', args.username);
+    if (args.displayName !== undefined) command.push('--display-name', args.displayName);
+    if (args.email !== undefined) command.push('--email', args.email);
+    if (args.clearEmail) command.push('--clear-email');
+    const output = await this.runCLI(command);
+    return { content: [{ type: 'text', text: output }] };
+  }
+
+  private async deleteEntity(args: any) {
+    const command = ['delete', args.id, '--force'];
+    const output = await this.runCLI(command);
+    return { content: [{ type: 'text', text: output }] };
   }
 
   async run() {

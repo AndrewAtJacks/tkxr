@@ -10,6 +10,7 @@ import { listTickets } from './commands/list.js';
 import { showTicket } from './commands/show.js';
 import { deleteTicket } from './commands/delete.js';
 import { updateTicketStatus } from './commands/status.js';
+import { editTicket } from './commands/edit.js';
 import { startServer } from './commands/serve.js';
 import { listUsers } from './commands/users.js';
 import { manageUser } from './commands/user.js';
@@ -31,6 +32,7 @@ const commands = {
   show: showTicket,
   delete: deleteTicket,
   status: updateTicketStatus,
+  edit: editTicket,
   serve: startServer,
   users: listUsers,
   user: manageUser,
@@ -61,21 +63,36 @@ function showHelp() {
   console.log('      --assignee <id>       Filter by assignee ID');
   console.log('      --sprint <id>         Filter by sprint ID');
   console.log('      --verbose, -v         Show assignee and sprint names');
-  console.log('  delete <id>               Delete a ticket');
+  console.log('  delete <id>               Delete a ticket, sprint, user, or comment');
   console.log('  status <id> <status>      Update ticket status (todo, progress, done)');
+  console.log('  edit <id> [options]       Edit ticket fields');
+  console.log('    --title <text>          New title');
+  console.log('    --description <text>    New description (or --clear-description)');
+  console.log('    --priority <level>      low, medium, high, critical (or --clear-priority)');
+  console.log('    --estimate <n>          Story points (or --clear-estimate)');
+  console.log('    --add-label <label>     Add a label (repeatable)');
+  console.log('    --remove-label <label>  Remove a label (repeatable)');
+  console.log('    --clear-labels          Remove all labels');
   console.log('  comments <id>             List comments for a ticket');
   console.log('  comments <id> --add       Add a comment to a ticket');
   console.log('    --author <author-id>    Author of the comment (user ID or username)');
   console.log('    --content <text>        Comment content');
+  console.log('  comments <id> --delete <comment-id>  Delete a comment');
   console.log();
   console.log(chalk.green('User Commands:'));
-  console.log('  users                     List all users');
-  console.log('  user create <username> <name>  Create a new user');
+  console.log('  users                              List all users');
+  console.log('  user create <username> <name>      Create a new user');
+  console.log('  user assign <ticket-id> <user>     Assign a ticket to a user (id or username)');
+  console.log('  user assign <ticket-id> --unassign Clear the ticket assignee');
+  console.log('  user edit <id-or-username> [opts]  Edit user (username/display-name/email)');
   console.log();
   console.log(chalk.green('Sprint Commands:'));
-  console.log('  sprints                   List all sprints');
-  console.log('  sprint create <name>      Create a new sprint');
-  console.log('  sprint status <id> <status>  Update sprint status');
+  console.log('  sprints                            List all sprints');
+  console.log('  sprint create <name>               Create a new sprint');
+  console.log('  sprint status <id> <status>        Update sprint status');
+  console.log('  sprint set <ticket-id> <sprint-id> Attach a ticket to a sprint');
+  console.log('  sprint set <ticket-id> --unset     Remove a ticket from its sprint');
+  console.log('  sprint edit <id> [opts]            Edit sprint (name/desc/goal/dates)');
   console.log();
   console.log(chalk.green('Server Commands:'));
   console.log('  serve                     Start web interface server');
@@ -94,11 +111,14 @@ function showHelp() {
   console.log('  tkxr user create johndoe "John Doe"');
   console.log('  tkxr sprint create "Sprint 1"');
   console.log('  tkxr sprint status spr-123 active');
+  console.log('  tkxr user assign tas-abc johndoe');
+  console.log('  tkxr sprint set tas-abc spr-123');
   console.log('  tkxr list tasks');
   console.log('  tkxr list --search "login"');
   console.log('  tkxr list --sort-by priority --order desc');
   console.log('  tkxr list --status progress --sort-by created');
   console.log('  tkxr status task-123 done');
+  console.log('  tkxr edit tas-123 --priority high --add-label backend');
   console.log('  tkxr comments tas-123');
   console.log('  tkxr comments tas-123 --add --author johndoe --content "Fixed the issue"');
   console.log('  tkxr serve --port 3000');

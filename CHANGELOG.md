@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-07-02
+### Added
+- CLI: `tkxr edit <id>` for tickets — updates `--title`, `--description`, `--priority`, `--estimate`, plus repeatable `--add-label` / `--remove-label` and `--clear-labels` / `--clear-priority` / `--clear-estimate` / `--clear-description`.
+- CLI: `tkxr user assign <ticket-id> <user>` (id or username) and `--unassign` to clear.
+- CLI: `tkxr user edit <id-or-username>` — `--username`, `--display-name`, `--email`, `--clear-email`.
+- CLI: `tkxr sprint set <ticket-id> <sprint-id>` and `--unset` to detach.
+- CLI: `tkxr sprint edit <id>` — `--name`, `--description`, `--goal`, `--start-date`, `--end-date`, plus matching `--clear-*` flags.
+- CLI: `tkxr comments <ticket-id> --delete <comment-id>`.
+- CLI: `tkxr show <id>` is now polymorphic — accepts ticket, sprint, or user IDs.
+- MCP: new tools `edit_ticket`, `assign_ticket`, `set_ticket_sprint`, `edit_sprint`, `edit_user`, `delete_comment`, `delete_entity` for parity with the CLI.
+- Notifier: `notifyUserUpdated`, `notifyUserDeleted`, `notifySprintDeleted` events so the web UI stays in sync on user/sprint mutations.
+
+### Fixed
+- MCP `delete_ticket` never actually deleted — the underlying `delete` CLI requires `--force`, which the MCP handler was not sending. Now sends `--force`.
+- `createUser` / `createSprint` failed with `ENOENT` on fresh repos that hadn't created any tickets yet, because the parent `tkxr/` directory did not exist. Both now `mkdir -p` before writing.
+- Sprint `status` updates and delete operations for sprints/users now emit notifier events, so the web UI no longer goes stale after CLI mutations.
+
+### Changed
+- `storage.updateSprint` now accepts `startDate` and `endDate` in the update payload (was previously limited to name/description/goal).
+
 ## [1.1.16] - 2026-07-02
 ### Fixed
 - MCP server no longer writes chalk-colored startup banner to stdout, which corrupted the JSON-RPC stream and caused AI tool calls (e.g. `create_ticket`) to fail when the server was launched via `pnpm dlx @legdev/tkxr mcp`. Banner is now written to stderr.

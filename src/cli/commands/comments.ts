@@ -9,14 +9,15 @@ interface CommentsArgs extends minimist.ParsedArgs {
   add?: boolean;
   author?: string;
   content?: string;
+  delete?: string;
 }
 
 export async function manageComments(args: CommentsArgs): Promise<void> {
   const [, ticketId] = args._;
-  
+
   if (!ticketId) {
     console.log(chalk.red('Error: Please provide a ticket ID'));
-    console.log(chalk.dim('Usage: tkxr comments <ticket-id> [--add] [--author <author-id>] [--content <content>]'));
+    console.log(chalk.dim('Usage: tkxr comments <ticket-id> [--add] [--author <author-id>] [--content <content>] [--delete <comment-id>]'));
     return;
   }
 
@@ -25,13 +26,15 @@ export async function manageComments(args: CommentsArgs): Promise<void> {
   try {
     // Verify ticket exists
     const result = await storage.findTicket(ticketId);
-    
+
     if (!result) {
       console.log(chalk.red(`Ticket '${ticketId}' not found`));
       return;
     }
 
-    if (args.add) {
+    if (args.delete) {
+      await deleteCommentById(storage, ticketId, String(args.delete));
+    } else if (args.add) {
       await addComment(storage, ticketId, args);
     } else {
       await listComments(storage, ticketId);
@@ -39,6 +42,24 @@ export async function manageComments(args: CommentsArgs): Promise<void> {
   } catch (error) {
     console.log(chalk.red(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`));
   }
+}
+
+async function deleteCommentById(storage: any, ticketId: string, commentId: string): Promise<void> {
+  const comments = await storage.getComments(ticketId);
+  const owned = comments.find((c: any) => c.id === commentId);
+  if (!owned) {
+    console.log(chalk.red(`Comment '${commentId}' not found on ticket '${ticketId}'`));
+    return;
+  }
+
+  const deleted = await storage.deleteComment(commentId);
+  if (!deleted) {
+    console.log(chalk.red(`Failed to delete comment '${commentId}'`));
+    return;
+  }
+
+  await notifier.notifyCommentDeleted(commentId, ticketId);
+  console.log(chalk.green(`✓ Deleted comment ${commentId}`));
 }
 
 async function listComments(storage: any, ticketId: string): Promise<void> {

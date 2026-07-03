@@ -58,11 +58,17 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
     const deleted = await storage.deleteEntity(entityType, id);
     
     if (deleted) {
-      // Notify web UI if it's a ticket (task or bug)
       if (entityType === 'tasks' || entityType === 'bugs') {
         await notifier.notifyTicketDeleted(id);
+      } else if (entityType === 'sprints') {
+        await notifier.notifySprintDeleted(id);
+      } else if (entityType === 'users') {
+        await notifier.notifyUserDeleted(id);
+      } else if (entityType === 'comments') {
+        // Comment delete needs ticketId — we don't have it in this generic path.
+        // The dedicated `comments --delete` command handles notification with ticketId.
       }
-      
+
       console.log(chalk.green(`✓ Deleted ${entityType.slice(0, -1)}: ${id}`));
     } else {
       console.log(chalk.red(`Error: Failed to delete ${id}`));

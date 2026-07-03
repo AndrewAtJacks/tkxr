@@ -22,6 +22,10 @@ export class ProjectStorage {
     return `${prefix}-${id}`;
   }
 
+  private async ensureBaseDir(): Promise<void> {
+    await fs.mkdir(path.dirname(this.usersPath), { recursive: true });
+  }
+
   // User CRUD
   async createUser(username: string, displayName: string, options: Partial<User> = {}): Promise<User> {
     const now = new Date();
@@ -35,6 +39,7 @@ export class ProjectStorage {
     };
     const users = await this.getUsers();
     users.push(user);
+    await this.ensureBaseDir();
     await fs.writeFile(this.usersPath, JSON.stringify(users, null, 2), 'utf8');
     return user;
   }
@@ -88,6 +93,7 @@ export class ProjectStorage {
     };
     const sprints = await this.getSprints();
     sprints.push(sprint);
+    await this.ensureBaseDir();
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
     return sprint;
   }
@@ -121,7 +127,7 @@ export class ProjectStorage {
     return sprint;
   }
 
-  async updateSprint(id: string, updates: Partial<Pick<Sprint, 'name' | 'description' | 'goal'>>): Promise<Sprint | null> {
+  async updateSprint(id: string, updates: Partial<Pick<Sprint, 'name' | 'description' | 'goal' | 'startDate' | 'endDate'>>): Promise<Sprint | null> {
     const sprints = await this.getSprints();
     const sprint = sprints.find(s => s.id === id);
     if (!sprint) return null;
