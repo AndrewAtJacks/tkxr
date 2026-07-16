@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import type { Sprint, Ticket, User } from './stores';
-  import { claudeConfig } from './stores';
+  import { claudeAvailable } from './settings';
   import { avatarColorFor, initials, normalizeTicket, sprintDotColor, STATUS_COLOR } from './util';
   import { copyToClipboard, showToast } from './clipboard';
   import { commitSprintPrompt, orchestrateSprintPrompt, sprintBreakdownPrompt } from './prompts';
@@ -386,7 +386,7 @@
       </div>
       <button class="orch-btn" on:click={runPlan} disabled={!canPlan}>
         <Sparkles size={14} color="#fff" />
-        <span>{$claudeConfig?.available ? 'Plan with Claude' : 'Copy plan prompt'}</span>
+        <span>{$claudeAvailable ? 'Plan with Claude' : 'Copy plan prompt'}</span>
       </button>
     </div>
 
@@ -398,7 +398,7 @@
       <div class="orch-hint">Copies a prompt that puts Claude Code in orchestrator mode — it fans out one sub-agent per open ticket, then merges each ticket branch into the sprint branch as they finish. {#if !sprint.worktree}Consider creating the sprint worktree first.{/if}</div>
       <button class="orch-btn" on:click={runOrchestrate}>
         <Sparkles size={14} color="#fff" />
-        <span>{$claudeConfig?.available ? 'Run in Claude' : 'Copy prompt'}</span>
+        <span>{$claudeAvailable ? 'Run in Claude' : 'Copy prompt'}</span>
       </button>
     </div>
 
@@ -413,7 +413,7 @@
       </div>
       <button class="orch-btn" on:click={commitWithClaude} title={sprint.worktree ? `Commit in ${sprint.worktree.path}` : 'No sprint worktree — Claude will ask before touching main'}>
         <Sparkles size={14} color="#fff" />
-        <span>{$claudeConfig?.available ? 'Commit with Claude' : 'Copy commit prompt'}</span>
+        <span>{$claudeAvailable ? 'Commit with Claude' : 'Copy commit prompt'}</span>
       </button>
     </div>
   {/if}

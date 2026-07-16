@@ -6,6 +6,8 @@
   import { currentUserId, resolveCurrentUser } from './currentUser';
   import { draggingTicketId } from './drag';
   import { onTicketEvent } from './ticketEvents';
+  import { cliDisabled } from './settings';
+  import { claudeConfig } from './stores';
   import Search from './icons/Search.svelte';
   import Sparkles from './icons/Sparkles.svelte';
   import Columns from './icons/Columns.svelte';
@@ -14,6 +16,7 @@
   import Filter from './icons/Filter.svelte';
   import Sun from './icons/Sun.svelte';
   import Moon from './icons/Moon.svelte';
+  import SettingsIcon from './icons/Settings.svelte';
 
   export let version = '';
   export let view: 'board' | 'list' = 'board';
@@ -34,7 +37,9 @@
   let dragOverKey: string | null = null;
   let showCompleted = false;
   let pickerOpen = false;
+  let settingsOpen = false;
   let footerEl: HTMLDivElement | null = null;
+  let settingsEl: HTMLDivElement | null = null;
 
   // Server-computed aggregates. Populated on mount and refreshed on any
   // ticket_* WS event (see tas-z-8q_Ljc / tas-4MNJ9qP5). Falls back to the
@@ -99,11 +104,14 @@
   }
 
   function onWindowClick(e: MouseEvent) {
-    if (!pickerOpen) return;
-    if (footerEl && !footerEl.contains(e.target as Node)) pickerOpen = false;
+    const target = e.target as Node;
+    if (pickerOpen && footerEl && !footerEl.contains(target)) pickerOpen = false;
+    if (settingsOpen && settingsEl && !settingsEl.contains(target)) settingsOpen = false;
   }
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape' && pickerOpen) pickerOpen = false;
+    if (e.key !== 'Escape') return;
+    if (pickerOpen) pickerOpen = false;
+    if (settingsOpen) settingsOpen = false;
   }
   let offTicketEvents: (() => void) | null = null;
   onMount(() => {
@@ -134,6 +142,11 @@
   $: activeSprints = sprints.filter(s => s.status !== 'completed');
   $: completedSprints = sprints.filter(s => s.status === 'completed');
   $: visibleSprints = showCompleted ? [...activeSprints, ...completedSprints] : activeSprints;
+
+  function onCliToggle(e: Event) {
+    const t = e.currentTarget as HTMLInputElement;
+    cliDisabled.set(t.checked);
+  }
 
   function selectView(v: 'board' | 'list') { dispatch('view', v); }
   function selectAllSprints() { dispatch('sprint', 'all'); }
@@ -348,6 +361,42 @@
       <span class="chevron" aria-hidden="true">▾</span>
     </button>
     <span class="live-dot" title="Live"></span>
+    <div class="settings-slot" bind:this={settingsEl}>
+      <button
+        class="theme-btn"
+        title="Settings"
+        aria-haspopup="dialog"
+        aria-expanded={settingsOpen}
+        on:click={() => (settingsOpen = !settingsOpen)}
+      >
+        <SettingsIcon size={14} />
+      </button>
+      {#if settingsOpen}
+        <div class="settings" role="dialog" aria-label="Settings">
+          <div class="settings-head">Settings</div>
+          <label class="settings-row">
+            <div class="settings-meta">
+              <div class="settings-name">Disable Claude CLI</div>
+              <div class="settings-hint">
+                {#if !$claudeConfig?.available}
+                  CLI not detected on server — actions already copy prompts to your clipboard.
+                {:else}
+                  Force the copy-paste fallback. Actions copy the prompt to your clipboard instead of spawning claude on the server.
+                {/if}
+              </div>
+            </div>
+            <span class="switch" class:on={$cliDisabled}>
+              <input
+                type="checkbox"
+                checked={$cliDisabled}
+                on:change={onCliToggle}
+              />
+              <span class="switch-thumb"></span>
+            </span>
+          </label>
+        </div>
+      {/if}
+    </div>
     <button class="theme-btn" title="Toggle theme" on:click={() => theme.toggle()}>
       {#if $theme === 'dark'}<Sun size={14} />{:else}<Moon size={14} />{/if}
     </button>
@@ -715,4 +764,80 @@
     cursor: pointer;
   }
   .theme-btn:hover { background: var(--surface); color: var(--text); }
+  .settings-slot {
+    position: static;
+    display: flex;
+    align-items: center;
+  }
+  .settings {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 8px;
+    right: 8px;
+    background: var(--elevated, var(--surface));
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.35);
+    padding: 6px;
+    z-index: 20;
+  }
+  .settings-head {
+    padding: 6px 10px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .settings-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .settings-row:hover { background: var(--surface-hover); }
+  .settings-meta { flex: 1; min-width: 0; }
+  .settings-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .settings-hint {
+    font-size: 11px;
+    color: var(--faint);
+    margin-top: 2px;
+    line-height: 1.35;
+  }
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 30px;
+    height: 18px;
+    border-radius: 9px;
+    background: var(--chip);
+    transition: background .12s;
+    flex: none;
+  }
+  .switch.on { background: var(--accent, #4c8dff); }
+  .switch input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    margin: 0;
+    cursor: pointer;
+  }
+  .switch-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform .12s;
+    box-shadow: 0 1px 2px rgba(0,0,0,.25);
+  }
+  .switch.on .switch-thumb { transform: translateX(12px); }
 </style>

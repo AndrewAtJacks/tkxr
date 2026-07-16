@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
-  import { claudeConfig, type Sprint, type Ticket, type TicketComment, type User } from './stores';
+  import { type Sprint, type Ticket, type TicketComment, type User } from './stores';
+  import { claudeAvailable } from './settings';
   import { avatarColorFor, initials, normalizeTicket, PRIORITY_META, relativeTime, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
   import { copyToClipboard, showToast } from './clipboard';
   import { runPrompt } from './claudeRun';
@@ -620,7 +621,7 @@
         <span>Hand this ticket to an agent</span>
       </div>
       <div class="ai-hint">
-        {#if $claudeConfig?.available}
+        {#if $claudeAvailable}
           Runs the prompt (ticket JSON + tkxr MCP reminder) in the local Claude CLI. Output streams into the run panel.
         {:else}
           Copies a prompt (ticket JSON + tkxr MCP reminder) to your clipboard. Paste into Claude Code.
@@ -651,11 +652,11 @@
       <div class="ai-input">
         <input
           class="input"
-          placeholder={$claudeConfig?.available ? 'Custom question — runs in Claude…' : 'Custom question — copies as a prompt…'}
+          placeholder={$claudeAvailable ? 'Custom question — runs in Claude…' : 'Custom question — copies as a prompt…'}
           bind:value={askInput}
           on:keydown={(e) => e.key === 'Enter' && copyAskFromInput()}
         />
-        <button class="btn" on:click={copyAskFromInput} disabled={!askInput.trim()}>{$claudeConfig?.available ? 'Run in Claude' : 'Copy prompt'}</button>
+        <button class="btn" on:click={copyAskFromInput} disabled={!askInput.trim()}>{$claudeAvailable ? 'Run in Claude' : 'Copy prompt'}</button>
       </div>
     </div>
 

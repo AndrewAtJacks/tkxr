@@ -1,5 +1,39 @@
 # Changelog
 
+## [2.1.2] - 2026-07-16
+
+### Added
+- **Sidebar settings popover with "Disable Claude CLI" toggle.** Gear
+  button next to the theme toggle in the sidebar footer opens a small
+  popover with a persistent switch. When flipped on, every prompt-
+  launching action (Work on this, Plan with Claude, Commit with Claude,
+  triage, custom asks) skips the server-spawned CLI and copies the
+  prompt to the clipboard instead — the paste-into-terminal fallback
+  that users have found more reliable than the CLI runs. State is
+  persisted to `localStorage` under `tkxr-settings`.
+- **`claudeAvailable` derived store** (`src/web/src/lib/settings.ts`).
+  Folds server-reported CLI availability with the user's disable
+  setting. Panels (`TicketPanel`, `SprintPanel`, `TriagePanel`) and
+  `runPrompt` all read this store, so button labels and behavior stay
+  in sync live when the user flips the toggle.
+
+## [2.1.1] - 2026-07-16
+
+### Fixed
+- **Worktree endpoints in installed/global tkxr.** `tkxr serve` chdir's into
+  its `dist/` at boot for static-asset resolution. When tkxr was installed
+  outside the target repo (global install / linked package) the fallback
+  landed in the install dir's `dist/` — outside any git repo — and every
+  worktree/git endpoint (`/api/worktrees`, `/api/tickets/:id/worktree`,
+  `/api/sprints/:id/worktree`, `/api/git/remote`, `/api/tickets/:id/git`,
+  `/api/sprints/:id/git`) failed with "Not a git repository" even though
+  the user launched from a valid repo root. The MCP-over-HTTP worktree
+  tools failed the same way. Now `serve` captures the original cwd before
+  chdir and threads it into `isGitRepo`, `listWorktrees`, `createWorktree`,
+  `createSprintWorktree`, `removeWorktree`, `getRemoteInfo`, `getRepoRoot`,
+  and `resolveClaudeCwd`. `ToolContext` gained a `repoCwd?: string` field
+  so the MCP handlers get the same fix.
+
 ## [2.1.0] - 2026-07-16
 
 ### Added
