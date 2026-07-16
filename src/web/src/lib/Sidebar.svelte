@@ -26,10 +26,14 @@
   const dispatch = createEventDispatcher();
 
   let dragOverKey: string | null = null;
+  let showCompleted = false;
 
   $: totalCount = tickets.length;
   $: sprintCounts = new Map(sprints.map(s => [s.id, tickets.filter(t => t.sprint === s.id).length]));
   $: userCounts = new Map(users.map(u => [u.id, tickets.filter(t => t.assignee === u.id).length]));
+  $: activeSprints = sprints.filter(s => s.status !== 'completed');
+  $: completedSprints = sprints.filter(s => s.status === 'completed');
+  $: visibleSprints = showCompleted ? [...activeSprints, ...completedSprints] : activeSprints;
 
   function selectView(v: 'board' | 'list') { dispatch('view', v); }
   function selectAllSprints() { dispatch('sprint', 'all'); }
@@ -138,7 +142,7 @@
       <span class="row-label">All tickets</span>
       <span class="mono count">{totalCount}</span>
     </button>
-    {#each sprints as sp (sp.id)}
+    {#each visibleSprints as sp (sp.id)}
       <div
         class="row"
         role="button"
@@ -168,6 +172,15 @@
         </button>
       </div>
     {/each}
+    {#if completedSprints.length > 0}
+      <button
+        class="show-completed"
+        title={showCompleted ? 'Hide completed sprints' : 'Show completed sprints'}
+        on:click={() => (showCompleted = !showCompleted)}
+      >
+        {showCompleted ? 'Hide completed' : `Show completed (${completedSprints.length})`}
+      </button>
+    {/if}
   </div>
 
   <div class="section-label">
@@ -401,6 +414,20 @@
     color: var(--accent);
     background: rgba(76,141,255,.12);
   }
+  .show-completed {
+    margin: 4px 4px 2px;
+    padding: 5px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    color: var(--faint);
+    font-size: 11px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .show-completed:hover { background: var(--surface); color: var(--text2); }
   .footer {
     border-top: 1px solid var(--border-subtle);
     padding: 10px 14px;
