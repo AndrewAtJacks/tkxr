@@ -1,6 +1,31 @@
 # Changelog
 
+## [2.0.2] - 2026-07-16
+
+### Fixed
+- `updateTicket` (assign, sprint set, and any patch without a `status`
+  field) round-tripped legacy `todo` rows back through the WS broadcast,
+  which the board silently dropped since `todo` is no longer a valid
+  column. The read-side mapping in `getAllTickets` now also runs on the
+  write path, so the row is migrated in place on the next update.
+- Sidebar rows with long sprint or user names pushed the count badge and
+  filter button off the right edge (the filter icon was unreachable even
+  on hover). Added `min-width: 0` to `.row-main` so the label ellipsis
+  engages under sibling pressure.
+
 All notable changes to this project will be documented in this file.
+
+## [2.0.1] - 2026-07-16
+
+### Fixed
+- MCP over HTTP: each session gets its own `McpServer` instance instead
+  of sharing one across all `StreamableHTTPServerTransport` connections.
+  Fixes tangled request-handler state when multiple MCP clients connect
+  concurrently.
+
+### Packaging
+- Ship `CHANGELOG.md` in the published tarball (added to `files`).
+- Explicitly list `LICENSE` in `files` (was auto-included).
 
 ## [2.0.0] - 2026-07-16
 

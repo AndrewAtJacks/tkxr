@@ -1,6 +1,6 @@
 {
   "name": "@legdev/tkxr",
-  "version": "2.0.0",
+  "version": "2.0.2",
   "description": "In-repo ticket management system with CLI and web interface",
   "keywords": [
     "tickets",
@@ -11,6 +11,14 @@
   ],
   "author": "Andrew Hein",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheLeggestOne/tkxr.git"
+  },
+  "homepage": "https://github.com/TheLeggestOne/tkxr#readme",
+  "bugs": {
+    "url": "https://github.com/TheLeggestOne/tkxr/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
@@ -19,7 +27,9 @@
   },
   "files": [
     "dist/**/*",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "scripts": {
     "bump": "node scripts/bump-version.js",
