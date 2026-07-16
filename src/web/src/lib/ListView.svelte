@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { Sprint, Ticket, User } from './stores';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { pagedTickets, type Sprint, type Ticket, type User } from './stores';
   import { avatarColorFor, initials, STATUS_COLOR, STATUS_LABEL } from './util';
   import { draggingTicketId } from './drag';
   import Bug from './icons/Bug.svelte';
@@ -11,6 +11,15 @@
   export let users: User[] = [];
 
   const dispatch = createEventDispatcher();
+
+  // Paged-store readables drive the infinite-scroll sentinel + empty state.
+  // `tickets` is still the render source (parent already subscribes to the
+  // paged items and passes them in) so we don't double-subscribe there, but
+  // we need direct access to `loading` / `nextCursor` / `total` for the
+  // "loading first page" vs "no results" distinction and the fetch guard.
+  const pagedLoading = pagedTickets.loading;
+  const pagedNextCursor = pagedTickets.nextCursor;
+  const pagedTotal = pagedTickets.total;
 
   $: sprintById = new Map(sprints.map(s => [s.id, s]));
   $: userById = new Map(users.map((u, i) => [u.id, { user: u, index: i }]));
@@ -31,9 +40,49 @@
     draggingId = null;
     draggingTicketId.set(null);
   }
+
+  // ---------------------------------------------------------------------------
+  // Infinite scroll sentinel
+  // ---------------------------------------------------------------------------
+  // Observe a sentinel div at the tail of the scroll container. When it comes
+  // within ~1 viewport of visibility we call `pagedTickets.fetchNextPage()`.
+  // The store guards against parallel/last-page fetches internally, but we
+  // also gate on `!$pagedLoading && $pagedNextCursor` here so rapid scroll
+  // events don't queue up N pending calls (which would still be safe, just
+  // wasteful).
+  let listEl: HTMLDivElement;
+  let sentinelEl: HTMLDivElement;
+  let observer: IntersectionObserver | null = null;
+
+  function maybeFetch() {
+    if (!$pagedLoading && $pagedNextCursor) {
+      void pagedTickets.fetchNextPage();
+    }
+  }
+
+  onMount(() => {
+    if (typeof IntersectionObserver === 'undefined' || !sentinelEl) return;
+    observer = new IntersectionObserver(
+      entries => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            maybeFetch();
+            break;
+          }
+        }
+      },
+      { root: listEl, rootMargin: '400px 0px' },
+    );
+    observer.observe(sentinelEl);
+  });
+
+  onDestroy(() => {
+    observer?.disconnect();
+    observer = null;
+  });
 </script>
 
-<div class="list">
+<div class="list" bind:this={listEl}>
   <div class="row head">
     <span></span>
     <span>ID</span>
@@ -72,8 +121,21 @@
       </span>
     </button>
   {/each}
+  <!--
+    Sentinel: sits after the last row inside the scroll container so the
+    IntersectionObserver (root = .list, rootMargin 400px) fires as we
+    approach the tail. Kept in the DOM even at end-of-list so the observer
+    reference stays valid; the maybeFetch() guard turns it into a no-op.
+  -->
+  <div class="sentinel" bind:this={sentinelEl} aria-hidden="true"></div>
   {#if tickets.length === 0}
-    <div class="empty">No tickets match.</div>
+    {#if $pagedLoading && $pagedTotal === 0}
+      <div class="empty">Loading…</div>
+    {:else if $pagedTotal === 0}
+      <div class="empty">No tickets match.</div>
+    {/if}
+  {:else if $pagedLoading}
+    <div class="loading-more">Loading more…</div>
   {/if}
 </div>
 
@@ -132,5 +194,16 @@
     padding: 40px;
     text-align: center;
     color: var(--faint);
+  }
+  .sentinel {
+    /* 1px keeps it observable while contributing no visible height. */
+    height: 1px;
+    width: 100%;
+  }
+  .loading-more {
+    padding: 12px;
+    text-align: center;
+    color: var(--faint);
+    font-size: 11.5px;
   }
 </style>
