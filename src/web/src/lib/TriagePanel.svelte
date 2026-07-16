@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { Sprint, Ticket, User } from './stores';
-  import { claudeConfig } from './stores';
+  import { claudeAvailable } from './settings';
   import { runPrompt } from './claudeRun';
   import { sprintBreakdownPrompt, sprintPlanPrompt, triagePrompt } from './prompts';
   import Sparkles from './icons/Sparkles.svelte';
@@ -101,7 +101,7 @@
 
   <div class="hero">
     <div class="hero-txt">
-      {#if $claudeConfig?.available}
+      {#if $claudeAvailable}
         <div class="hero-t">Run triage in Claude</div>
         <div class="hero-s">Sends a full triage prompt (open tickets + tkxr MCP reminder) straight to the claude CLI. Live output streams into the run panel.</div>
       {:else}
@@ -110,7 +110,7 @@
       {/if}
     </div>
     <button class="btn btn-primary" on:click={copyFullTriage}>
-      {$claudeConfig?.available ? 'Run in Claude' : 'Copy triage prompt'}
+      {$claudeAvailable ? 'Run in Claude' : 'Copy triage prompt'}
     </button>
   </div>
 
@@ -123,7 +123,7 @@
       <div class="detail">Break the goal into child tickets (waves via <code>dependsOn</code>). Guardrails: won't touch existing tickets, capped at ~12 new tickets.</div>
       <div class="row-actions">
         <button class="btn" on:click={() => planSprint(s)}>
-          {$claudeConfig?.available ? 'Plan with Claude' : 'Copy plan prompt'}
+          {$claudeAvailable ? 'Plan with Claude' : 'Copy plan prompt'}
         </button>
       </div>
     </div>
@@ -141,7 +141,7 @@
       <div class="row-actions">
         <button class="btn" on:click={() => runItem(it)}>
           {it.kind === 'draft_sprint'
-            ? ($claudeConfig?.available ? 'Run in Claude' : 'Copy plan prompt')
+            ? ($claudeAvailable ? 'Run in Claude' : 'Copy plan prompt')
             : 'Show me'}
         </button>
       </div>

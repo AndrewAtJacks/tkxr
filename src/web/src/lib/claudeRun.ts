@@ -21,6 +21,7 @@
 import { get, writable, type Writable } from 'svelte/store';
 import { browser } from '$app/environment';
 import { claudeConfig } from './stores';
+import { claudeAvailable } from './settings';
 import { copyPrompt, showToast } from './clipboard';
 
 // ---------------------------------------------------------------------------
@@ -257,11 +258,17 @@ export async function runPrompt(prompt: string, opts: RunPromptOptions = {}): Pr
   const cfg = get(claudeConfig);
   const label = opts.label ?? 'Claude run';
 
-  // Availability short-circuit (docs §5 tier 1).
-  if (!cfg || cfg.available === false) {
+  // Availability short-circuit (docs §5 tier 1). `claudeAvailable` folds in the
+  // user-facing "force copy-paste" setting from settings.ts — when the user
+  // has flipped that toggle we skip the CLI entirely, even if the server has
+  // the binary.
+  if (!get(claudeAvailable)) {
     await copyPrompt(prompt, `${label}: prompt copied — paste into Claude Code`);
     return { spawned: false };
   }
+  // Retain the `cfg` guard for TS narrowing / defense: `claudeAvailable` being
+  // true implies `cfg.available` is true, but the compiler doesn't know that.
+  void cfg;
 
   // Generate the runId client-side so we can wire up the "owned" set + open
   // the panel eagerly, before the server round-trip completes.
