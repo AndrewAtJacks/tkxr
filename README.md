@@ -418,14 +418,19 @@ ws.onmessage = (event) => {
 ## Configuration
 # Server Configuration
 
-The `.env.tkxr` file is dynamically created by the web UI server. It stores the host, port, and URL for the web interface (default: http://localhost:8080) in standard dotenv format:
+The `.tkxr-server` file is dynamically created by the web UI server. It stores the host, port, and URL for the web interface (default: http://localhost:8080) as JSON so the notifier client, the Vite dev proxy, and any other tooling can discover where the running server lives:
 
-```
-TKXR_HOST=localhost
-TKXR_PORT=8080
+```json
+{
+  "host": "localhost",
+  "port": 8080,
+  "url": "http://localhost:8080"
+}
 ```
 
-You can override the web UI port by editing `.env.tkxr`, using CLI flags:
+The file is cleaned up when the server shuts down. CLI/MCP commands also honor `TKXR_HOST` / `TKXR_PORT` (or `TKXR_SERVER_URL`) as env fallbacks when no `.tkxr-server` file is present.
+
+You can override the web UI port by using CLI flags:
 
 ```bash
 pnpm dlx @legdev/tkxr serve --port 3000

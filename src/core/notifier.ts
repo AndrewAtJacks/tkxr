@@ -128,22 +128,32 @@ export class NotificationClient {
 import { existsSync, readFileSync } from 'fs';
 
 /**
- * Try to read server config from .tkxr-server file
+ * Try to read server config from .tkxr-server file, then fall back to env vars,
+ * then to the default localhost:8080. The .tkxr-server JSON file is written by
+ * `tkxr serve` so CLI/MCP-stdio invocations pointing at a custom host/port
+ * automatically notify the running web server on the correct URL.
  */
 function getDefaultServerUrl(): string {
   try {
     const configPath = './.tkxr-server';
     if (existsSync(configPath)) {
       const config = JSON.parse(readFileSync(configPath, 'utf8'));
-      return config.url || `http://localhost:${config.port || 8080}`;
+      if (config.url) return config.url;
+      const host = config.host || 'localhost';
+      const port = config.port || 8080;
+      return `http://${host}:${port}`;
     }
   } catch (error) {
     // Ignore errors, fall back to defaults
     console.debug('Could not read server config:', error);
   }
-  
-  // Fallback to environment or default
-  return process.env.TKXR_SERVER_URL || `http://localhost:${process.env.TKXR_PORT || 8080}`;
+
+  // Fallback to environment or default. Honor either an explicit URL or the
+  // same TKXR_HOST/TKXR_PORT pair that `tkxr serve` accepts.
+  if (process.env.TKXR_SERVER_URL) return process.env.TKXR_SERVER_URL;
+  const envHost = process.env.TKXR_HOST || 'localhost';
+  const envPort = process.env.TKXR_PORT || process.env.PORT || '8080';
+  return `http://${envHost}:${envPort}`;
 }
 
 // Global instance - can be reconfigured at runtime
