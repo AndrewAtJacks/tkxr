@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type minimist from 'minimist';
-import { TKXRMCPServer } from '../../mcp/server.js';
+import { runMcpStdio } from '../../mcp/server.js';
 
 interface McpArgs extends minimist.ParsedArgs {
   _: string[];
@@ -14,15 +14,16 @@ export async function startMCPServer(args: McpArgs): Promise<void> {
   }
 
   try {
-    console.log(chalk.blue.bold('Starting TKXR MCP Server...'));
-    console.log(chalk.gray('MCP server allows AI assistants to manage tickets through CLI commands'));
-    console.log();
+    // MCP uses stdio JSON-RPC on stdout — any stdout write corrupts the protocol.
+    // Log to stderr instead so AI clients (e.g. via `pnpm dlx @legdev/tkxr mcp`) can parse responses.
+    console.error(chalk.blue.bold('Starting TKXR MCP Server...'));
+    console.error(chalk.gray('MCP server allows AI assistants to manage tickets through CLI commands'));
+    console.error();
 
-    const server = new TKXRMCPServer();
-    await server.run();
+    await runMcpStdio();
 
     // This line should never be reached since MCP servers run indefinitely
-    console.log(chalk.green('MCP server started successfully'));
+    console.error(chalk.green('MCP server started successfully'));
   } catch (error) {
     console.error(chalk.red('Failed to start MCP server:'), error instanceof Error ? error.message : String(error));
     process.exit(1);

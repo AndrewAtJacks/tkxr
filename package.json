@@ -1,6 +1,6 @@
 {
   "name": "@legdev/tkxr",
-  "version": "1.1.15",
+  "version": "2.0.0",
   "description": "In-repo ticket management system with CLI and web interface",
   "keywords": [
     "tickets",
@@ -14,8 +14,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "tkxr": "./dist/cli/index.js",
-    "tkxr-mcp": "./dist/mcp/server.js"
+    "tkxr": "dist/cli/index.js",
+    "tkxr-mcp": "dist/mcp/server.js"
   },
   "files": [
     "dist/**/*",
@@ -23,6 +23,9 @@
   ],
   "scripts": {
     "bump": "node scripts/bump-version.js",
+    "bump:major": "node scripts/bump-version.js major",
+    "bump:minor": "node scripts/bump-version.js minor",
+    "bump:patch": "node scripts/bump-version.js patch",
     "build": "pnpm run build:cli && pnpm run --filter tkxr-web build && node scripts/copy-package-to-dist.js",
     "build:cli": "tsc",
     "build:web": "pnpm run --filter tkxr-web build",

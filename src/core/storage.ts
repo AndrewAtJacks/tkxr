@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { nanoid } from 'nanoid';
 import type { Ticket, Sprint, User, TicketType, TicketComment } from './types.js';
+import { isGitRepo, removeWorktree } from './worktree.js';
 
 export class ProjectStorage {
   private ticketsDir: string;
@@ -22,6 +23,10 @@ export class ProjectStorage {
     return `${prefix}-${id}`;
   }
 
+  private async ensureBaseDir(): Promise<void> {
+    await fs.mkdir(path.dirname(this.usersPath), { recursive: true });
+  }
+
   // User CRUD
   async createUser(username: string, displayName: string, options: Partial<User> = {}): Promise<User> {
     const now = new Date();
@@ -35,6 +40,7 @@ export class ProjectStorage {
     };
     const users = await this.getUsers();
     users.push(user);
+    await this.ensureBaseDir();
     await fs.writeFile(this.usersPath, JSON.stringify(users, null, 2), 'utf8');
     return user;
   }
@@ -56,16 +62,46 @@ export class ProjectStorage {
     }
   }
 
-  async deleteUser(userId: string): Promise<boolean> {
+  async deleteUser(userId: string): Promise<{ deleted: boolean; unassignedTickets: Ticket[] }> {
     const users = await this.getUsers();
     const index = users.findIndex(u => u.id === userId);
-    if (index === -1) return false;
+    if (index === -1) return { deleted: false, unassignedTickets: [] };
     users.splice(index, 1);
     await fs.writeFile(this.usersPath, JSON.stringify(users, null, 2), 'utf8');
-    return true;
+
+    // Null out ticket.assignee for every ticket that pointed at the deleted user.
+    // Otherwise the board keeps rendering '?' avatars and the filter-by-user UI
+    // still lists a dead id.
+    const unassignedTickets: Ticket[] = [];
+    const chunkFiles = await this.getTicketChunkFiles();
+    for (const file of chunkFiles) {
+      const filePath = path.join(this.ticketsDir, file);
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      let touched = false;
+      const newLines = lines.map(line => {
+        const t = JSON.parse(line);
+        if (t.assignee === userId) {
+          touched = true;
+          const next = { ...t, assignee: undefined, updatedAt: new Date() };
+          unassignedTickets.push({
+            ...next,
+            createdAt: new Date(next.createdAt),
+            updatedAt: new Date(next.updatedAt),
+          });
+          return JSON.stringify(next);
+        }
+        return line;
+      });
+      if (touched) {
+        await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
+      }
+    }
+
+    return { deleted: true, unassignedTickets };
   }
 
-  async updateUser(id: string, updates: Partial<Pick<User, 'username' | 'displayName' | 'email'>>): Promise<User | null> {
+  async updateUser(id: string, updates: Partial<Pick<User, 'username' | 'displayName' | 'email' | 'color'>>): Promise<User | null> {
     const users = await this.getUsers();
     const user = users.find(u => u.id === id);
     if (!user) return null;
@@ -88,6 +124,7 @@ export class ProjectStorage {
     };
     const sprints = await this.getSprints();
     sprints.push(sprint);
+    await this.ensureBaseDir();
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
     return sprint;
   }
@@ -112,32 +149,77 @@ export class ProjectStorage {
   }
 
   async updateSprintStatus(id: string, status: Sprint['status']): Promise<Sprint | null> {
-    const sprints = await this.getSprints();
-    const sprint = sprints.find(s => s.id === id);
-    if (!sprint) return null;
-    sprint.status = status;
-    sprint.updatedAt = new Date();
-    await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
-    return sprint;
+    // Route through updateSprint so status-transition hooks (e.g. auto-close worktree on
+    // completed) fire consistently across all paths.
+    return this.updateSprint(id, { status });
   }
 
-  async updateSprint(id: string, updates: Partial<Pick<Sprint, 'name' | 'description' | 'goal'>>): Promise<Sprint | null> {
+  async updateSprint(id: string, updates: Partial<Pick<Sprint, 'name' | 'description' | 'goal' | 'startDate' | 'endDate' | 'status' | 'worktree'>>): Promise<Sprint | null> {
     const sprints = await this.getSprints();
     const sprint = sprints.find(s => s.id === id);
     if (!sprint) return null;
     Object.assign(sprint, updates);
     sprint.updatedAt = new Date();
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
+
+    // Auto-close sprint worktree when moved to completed (best effort, keep the branch —
+    // it may still be pending an upstream merge / PR).
+    if (sprint.status === 'completed' && sprint.worktree && updates.worktree === undefined) {
+      const wt = sprint.worktree;
+      try {
+        if (await isGitRepo()) {
+          await removeWorktree({ path: wt.path, branch: wt.branch, force: false, keepBranch: true });
+          sprint.worktree = null;
+          sprint.updatedAt = new Date();
+          await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
+        }
+      } catch {
+        // Dirty / already gone / locked — leave sprint.worktree as-is so the human sees + decides.
+      }
+    }
+
     return sprint;
   }
 
-  async deleteSprint(sprintId: string): Promise<boolean> {
+  async deleteSprint(sprintId: string): Promise<{ ok: boolean; sweptTickets: Ticket[] }> {
     const sprints = await this.getSprints();
     const index = sprints.findIndex(s => s.id === sprintId);
-    if (index === -1) return false;
+    if (index === -1) return { ok: false, sweptTickets: [] };
     sprints.splice(index, 1);
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
-    return true;
+
+    // Sweep tickets that were attached to this sprint — leaving stale sprint refs
+    // makes them disappear from any sprint view but linger under "All tickets" with
+    // a broken chip. Clear the field in-place across the NDJSON chunks and return
+    // the updated tickets so callers can broadcast ticket_updated for each.
+    const sweptTickets: Ticket[] = [];
+    const chunkFiles = await this.getTicketChunkFiles();
+    for (const file of chunkFiles) {
+      const filePath = path.join(this.ticketsDir, file);
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      let touched = false;
+      const newLines = lines.map(line => {
+        const t = JSON.parse(line);
+        if (t.sprint === sprintId) {
+          touched = true;
+          const next = { ...t, sprint: undefined, updatedAt: new Date() };
+          delete next.sprint;
+          sweptTickets.push({
+            ...next,
+            createdAt: new Date(t.createdAt),
+            updatedAt: next.updatedAt,
+          });
+          return JSON.stringify(next);
+        }
+        return line;
+      });
+      if (touched) {
+        await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
+      }
+    }
+
+    return { ok: true, sweptTickets };
   }
 
   // Ticket CRUD (NDJSON)
@@ -160,11 +242,12 @@ export class ProjectStorage {
       id: this.generateId(type),
       type,
       title,
-      status: 'todo',
+      status: 'backlog',
       createdAt: now,
       updatedAt: now,
       ...options,
     };
+    if (ticket.estimate === undefined) ticket.estimate = 1;
     const chunkFiles = await this.getTicketChunkFiles();
     let chunkFile = chunkFiles[chunkFiles.length - 1];
     if (!chunkFile) {
@@ -195,6 +278,7 @@ export class ProjectStorage {
         const t = JSON.parse(line);
         return {
           ...t,
+          status: t.status === 'todo' ? 'backlog' : t.status,
           createdAt: new Date(t.createdAt),
           updatedAt: new Date(t.updatedAt),
         };
@@ -253,6 +337,11 @@ export class ProjectStorage {
   }
 
   async getComments(ticketId: string): Promise<TicketComment[]> {
+    const all = await this.getAllComments();
+    return all.filter(c => c.ticketId === ticketId);
+  }
+
+  async getAllComments(): Promise<TicketComment[]> {
     const chunkFiles = await this.getCommentChunkFiles();
     let comments: TicketComment[] = [];
     for (const file of chunkFiles) {
@@ -267,7 +356,31 @@ export class ProjectStorage {
         };
       }));
     }
-    return comments.filter(c => c.ticketId === ticketId);
+    return comments;
+  }
+
+  // Aggregate comment counts across every ticket. Cheap enough for the current
+  // NDJSON layout (one pass over all chunk files, no JSON.parse per line beyond
+  // a tiny field extraction), and lets the board render badges without N fetches.
+  async getCommentCounts(): Promise<Record<string, number>> {
+    const chunkFiles = await this.getCommentChunkFiles();
+    const counts: Record<string, number> = {};
+    for (const file of chunkFiles) {
+      const content = await fs.readFile(path.join(this.commentsDir, file), 'utf8');
+      const lines = content.split('\n');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const c = JSON.parse(line);
+          if (c && typeof c.ticketId === 'string') {
+            counts[c.ticketId] = (counts[c.ticketId] || 0) + 1;
+          }
+        } catch {
+          // ignore malformed lines
+        }
+      }
+    }
+    return counts;
   }
 
   // Find ticket by ID
@@ -320,9 +433,9 @@ export class ProjectStorage {
       case 'bugs':
         return this.deleteTicket(id);
       case 'sprints':
-        return this.deleteSprint(id);
+        return (await this.deleteSprint(id)).ok;
       case 'users':
-        return this.deleteUser(id);
+        return (await this.deleteUser(id)).deleted;
       case 'comments':
         return this.deleteComment(id);
       default:
@@ -363,15 +476,54 @@ export class ProjectStorage {
       const newLines = lines.map(line => {
         const t = JSON.parse(line);
         if (t.id === id) {
-          updatedTicket = { ...t, ...updates, updatedAt: new Date() };
-          return JSON.stringify(updatedTicket);
+          const next: Ticket = { ...t, ...updates, updatedAt: new Date() };
+          updatedTicket = next;
+          return JSON.stringify(next);
         }
         return line;
       });
       await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
       if (updatedTicket) break;
     }
+
+    // Auto-close ticket worktree when moved to done (best effort, never blocks the status change).
+    const done = updatedTicket as Ticket | null;
+    if (done && done.status === 'done' && done.worktree && updates.worktree === undefined) {
+      const wt = done.worktree;
+      try {
+        if (await isGitRepo()) {
+          await removeWorktree({ path: wt.path, branch: wt.branch, force: false, keepBranch: false });
+          // Success — clear the reference in a second write.
+          updatedTicket = await this._clearWorktreeField(id, done) || done;
+        }
+      } catch {
+        // Worktree dirty / already gone / branch has unpushed work — leave ticket.worktree as-is
+        // so the human sees "still has a worktree" and can decide.
+      }
+    }
+
     return updatedTicket;
+  }
+
+  private async _clearWorktreeField(id: string, ticket: Ticket): Promise<Ticket | null> {
+    const chunkFiles = await this.getTicketChunkFiles();
+    let updated: Ticket | null = null;
+    for (const file of chunkFiles) {
+      const filePath = path.join(this.ticketsDir, file);
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      const newLines = lines.map(line => {
+        const t = JSON.parse(line);
+        if (t.id === id) {
+          updated = { ...t, worktree: null, updatedAt: new Date() };
+          return JSON.stringify(updated);
+        }
+        return line;
+      });
+      await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
+      if (updated) break;
+    }
+    return updated;
   }
 
   // Update ticket status

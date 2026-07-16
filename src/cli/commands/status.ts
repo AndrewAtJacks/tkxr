@@ -6,7 +6,7 @@ import { notifier } from '../../core/notifier.js';
 
 interface StatusArgs extends minimist.ParsedArgs {}
 
-const VALID_STATUSES: TicketStatus[] = ['todo', 'progress', 'done'];
+const VALID_STATUSES: TicketStatus[] = ['backlog', 'progress', 'review', 'blocked', 'done'];
 
 export async function updateTicketStatus(args: StatusArgs): Promise<void> {
   const [, id, status] = args._;
@@ -43,13 +43,15 @@ export async function updateTicketStatus(args: StatusArgs): Promise<void> {
     // Notify web UI
     await notifier.notifyTicketUpdated(updatedTicket);
 
-    const statusColors = {
-      todo: chalk.gray,
+    const statusColors: Record<TicketStatus, (s: string) => string> = {
+      backlog: chalk.gray,
       progress: chalk.yellow,
+      review: chalk.blue,
+      blocked: chalk.red,
       done: chalk.green,
     };
-    
-    const statusColor = statusColors[updatedTicket.status];
+
+    const statusColor = statusColors[updatedTicket.status] || chalk.white;
     
     console.log(chalk.green(`✓ Updated ticket status`));
     console.log(`  ID: ${chalk.blue(updatedTicket.id)}`);

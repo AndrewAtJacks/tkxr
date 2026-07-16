@@ -17,9 +17,11 @@ interface ListArgs extends minimist.ParsedArgs {
 }
 
 function formatTicket(ticket: Ticket, verbose: boolean = false, users: User[] = [], sprints: Sprint[] = []): string {
-  const statusColors = {
-    todo: chalk.gray,
+  const statusColors: Record<string, (s: string) => string> = {
+    backlog: chalk.gray,
     progress: chalk.yellow,
+    review: chalk.blue,
+    blocked: chalk.red,
     done: chalk.green,
   };
   
@@ -258,8 +260,8 @@ function sortTickets(tickets: Ticket[], args: ListArgs): Ticket[] {
         compareValue = a.title.localeCompare(b.title);
         break;
       case 'status':
-        const statusOrder = { todo: 0, progress: 1, done: 2 };
-        compareValue = statusOrder[a.status] - statusOrder[b.status];
+        const statusOrder: Record<string, number> = { backlog: 0, progress: 1, review: 2, blocked: 3, done: 4 };
+        compareValue = (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99);
         break;
       case 'priority':
         const priorityOrder = { low: 0, medium: 1, high: 2, critical: 3 };

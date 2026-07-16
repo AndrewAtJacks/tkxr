@@ -1,217 +1,236 @@
-# tkxr - In-Repo Ticket Management System
+# tkxr — In-Repo Ticket Manager
 
-tkxr is a lightweight, file-based ticket management system with a modern web UI for human users, and CLI/MCP server interfaces for AI and automation. It uses chunked NDJSON for tickets/comments and JSON for sprints/users, ensuring scalable, fast, and version-controlled workflows. Ideal for small teams wanting Jira-like functionality without external dependencies.
+tkxr is a lightweight, file-based ticket manager that lives inside your repo. It ships with:
 
-## Features
+- a keyboard-driven **sidebar + panel** web UI (Svelte + Vite) for humans,
+- a full **CLI** for scripting and shell workflows,
+- an **MCP server** (stdio bin + HTTP `/mcp` endpoint) so AI agents can drive it,
+- optional **per-ticket and per-sprint git worktrees** so multiple agents can work concurrently without stepping on each other.
 
-- 📁 **File-based Storage** - Tickets and comments stored as NDJSON chunks, sprints/users as JSON
-- 🌐 **Web Dashboard** - The primary interface for humans to view, manage, and interact with tickets, sprints, users, and comments
-- 🚀 **CLI Interface** - Designed for automation, scripting, and AI agents to manage tickets
-- 🤖 **AI Integration** - MCP server enables AI assistants to interact with tickets, sprints, users, and comments
-- 🔄 **Real-time Updates** - WebSocket-powered live updates
-- 🏃 **Sprint Management** - Complete sprint lifecycle management
-- 👥 **User Management** - Assign tickets to team members
-- 💬 **Comment Support** - Add, list, and manage comments for tickets
-- ⚡ **Zero Dependencies** - No external databases required
+Tickets and comments are stored as chunked NDJSON, sprints and users as JSON, all under `./tkxr/` in the working directory. Everything is text you can `git diff`.
+
+---
 
 ## Installation
 
-### Run tkxr instantly with npx or pnpm dlx
-
-You do not need to install tkxr globally. Run any command directly using pnpm dlx or npx:
+You can run tkxr without installing it globally:
 
 ```bash
-# Using pnpm dlx
-pnpm dlx tkxr serve         # Start the web interface
-pnpm dlx tkxr mcp           # Start the MCP server
-pnpm dlx tkxr list          # List tickets
-pnpm dlx tkxr create task "Title"  # Create a task
-pnpm dlx tkxr comments <ticket-id>  # Manage comments
+pnpm dlx @legdev/tkxr serve    # web + REST + MCP-over-HTTP server
+pnpm dlx @legdev/tkxr mcp      # MCP stdio server (for MCP client configs)
+pnpm dlx @legdev/tkxr list     # any CLI subcommand
 
-# Using npx
-npx tkxr serve              # Start the web interface
-npx tkxr mcp                # Start the MCP server
-npx tkxr list               # List tickets
-npx tkxr create task "Title"       # Create a task
-npx tkxr comments <ticket-id>      # Manage comments
+# Or via npx
+npx @legdev/tkxr serve
 ```
 
-Global install is optional:
+Global install (optional, gives you the `tkxr` and `tkxr-mcp` bins on PATH):
 
 ```bash
-pnpm install -g tkxr
+pnpm install -g @legdev/tkxr
 ```
 
-## Quick Start
-> **Human users:** Use the web UI for all ticket management, sprint planning, and user interactions. Open http://localhost:8080 after running `pnpm dlx tkxr serve`.
-> **AI/automation:** Use the CLI or MCP server for programmatic access, scripting, and integration with AI tools.
+Requires Node ≥ 18.
 
-### 1. Create your first tickets and comments
+---
+
+## Quick start
 
 ```bash
-tkxr create task "Implement user login"
-tkxr create bug "Fix navigation menu"
-tkxr sprint create "Sprint 1 - Authentication"
-tkxr user create johndoe "John Doe" --email john@example.com
-# Add a comment to a ticket
-tkxr comments tas-AbCdEfGh --add --author johndoe --content "This is a comment"
+# 1. Start the server (web UI + REST + MCP over HTTP)
+pnpm dlx @legdev/tkxr serve
+# → open http://localhost:8080
+
+# 2. Or use the CLI directly
+tkxr user create alice "Alice"
+tkxr sprint create "Sprint 1" --goal "Ship auth"
+tkxr create task "Wire up login form" --sprint spr-abc123 --priority high
+tkxr status tas-abc12345 progress
+tkxr comments tas-abc12345 --add --author alice --content "PR up for review"
 ```
 
-### 2. List and manage entities
+Data lands in `./tkxr/`. Commit it like any other source file.
+
+---
+
+## Data model
+
+| Entity        | ID prefix | Storage                                    | Notes |
+|---------------|-----------|--------------------------------------------|-------|
+| Ticket (task) | `tas-`    | `tkxr/tickets/tickets-XXXX.ndjson`         | one JSON object per line |
+| Ticket (bug)  | `bug-`    | `tkxr/tickets/tickets-XXXX.ndjson`         | same shape, different type |
+| Comment       | `com-`    | `tkxr/comments/comments-XXXX.ndjson`       | linked by `ticketId` |
+| Sprint        | `spr-`    | `tkxr/sprints.json`                        | one file |
+| User          | `use-`    | `tkxr/users.json`                          | one file |
+
+### Ticket statuses (5-column board)
+
+```
+backlog → progress → review → done
+                ↘ blocked ↙
+```
+
+`backlog`, `progress`, `review`, `blocked`, `done` — all valid targets for `tkxr status <id> <status>` and the MCP `update_ticket_status` tool.
+
+### Sprint statuses
+
+`planning → active → completed`. Completing a sprint that owns a worktree automatically removes the worktree.
+
+### Users & per-user color
+
+Every user has an optional `color` field. The web UI uses it for their avatar and their sidebar row; if unset, a color is picked from a small palette based on the user's index. Set it through the User panel in the web UI or the MCP `edit_user` / `create_user` tools.
+
+### Dependencies
+
+Tickets can declare inter-ticket blockers via `dependsOn: string[]`. Read tools (`list_tickets`, `get_ticket`) surface both `dependsOn` and a computed `blockedBy` (unmet or missing deps), so an orchestrator can topological-sort a sprint from a single call. Set them via the MCP `edit_ticket` tool (`dependsOn`, `addDependencies`, `removeDependencies`, `clearDependencies`) or `create_ticket` (`dependsOn`).
+
+---
+
+## Web UI
+
+Open `http://localhost:8080` after `tkxr serve`.
+
+Layout:
+
+- **Left sidebar** — sprints, users, view switcher, theme toggle, command palette, AI Triage. Drag a ticket onto a sprint or user row to reassign.
+- **Toolbar** — context title, search box, type filter, sort selector, "New ticket" button.
+- **Main view** — either the 5-column **Board** or the **List** view. Board columns match the 5 statuses; drag between columns to move a ticket. Each column has an inline quick-add.
+- **Sprint strip** — appears above the view when a sprint is selected, showing `done / total` story points.
+- **Workspace panel** — a slide-in panel on the right for the currently selected ticket, sprint, user, or the AI Triage report. Never modal; you can keep the board visible behind it.
+- **Command palette** — Cmd/Ctrl-K, full-text ticket search, quick actions, natural-language ticket draft ("critical bug: login crash for @alice").
+
+### Keyboard shortcuts
+
+| Key            | Action                                    |
+|----------------|-------------------------------------------|
+| `Cmd/Ctrl + K` | Toggle command palette                    |
+| `/`            | Focus the toolbar search box              |
+| `C`            | New ticket (opens the ticket panel)       |
+| `B`            | Switch to Board view                      |
+| `L`            | Switch to List view                       |
+| `Esc`          | Close the workspace panel / palette       |
+| `Enter`        | Commit a quick-add (in board columns) or send a comment (in ticket panel) |
+
+Shortcuts are ignored while you are typing in an input.
+
+The UI persists filters (view, active sprint, active user, type filter, sort, search) to `localStorage` under `tkxr-ui`.
+
+### Live updates
+
+Every mutation — from the UI, the CLI, or the MCP server — broadcasts a WebSocket event that the UI listens to and refetches on. You do not need to refresh.
+
+---
+
+## CLI
+
+All commands accept `--help`. The most common are listed below.
+
+### Tickets
 
 ```bash
-tkxr list
+tkxr create task "Wire up login" \
+  --description "OAuth first, password fallback later" \
+  --priority high --estimate 3 \
+  --sprint spr-abc12345 --assignee alice
+
+tkxr new bug "Dashboard crashes on empty state"       # alias for `create bug`
+
+tkxr list                                              # all tickets
+tkxr list tasks                                        # only tasks
+tkxr list --status progress --sort-by priority
+tkxr list --search "login" --verbose                   # -v shows assignee + sprint names
+tkxr list --sprint spr-abc12345
+
+tkxr show tas-abc12345                                 # polymorphic: also accepts spr- and use- ids
+tkxr status tas-abc12345 review                        # backlog|progress|review|blocked|done
+tkxr edit tas-abc12345 --priority critical --add-label backend
+tkxr delete tas-abc12345 --force
+```
+
+### Comments
+
+```bash
+tkxr comments tas-abc12345                                            # list
+tkxr comments tas-abc12345 --add --author alice --content "LGTM"      # add
+tkxr comments tas-abc12345 --delete com-abc12345                      # delete
+```
+
+### Users
+
+```bash
 tkxr users
-tkxr sprints
-tkxr sprint status spr-abc123 active
-tkxr comments tas-AbCdEfGh           # List comments for a ticket
-```
-
-### 3. Update ticket status
-
-```bash
-# Mark ticket as in progress
-tkxr status tas-AbCdEfGh progress
-
-# Mark ticket as done
-tkxr status tas-AbCdEfGh done
-```
-
-### 4. Start interfaces
-
-```bash
-# Web interface (human-friendly)
-tkxr serve
-
-# MCP server (AI integration)
-tkxr mcp
-```
-
-Open http://localhost:8080 in your browser to access the web dashboard.
-
-## CLI Commands
-
-### Ticket & Comment Commands
-
-```bash
-# Create tickets with options
-tkxr create task "Task title" \
-  --description "Detailed description" \
-  --assignee usr-12345678 \
-  --sprint spr-12345678 \
-  --priority high \
-  --estimate 5
-
-tkxr create bug "Bug title" \
-  --description "Bug description" \
-  --priority critical
-
-# List tickets
-tkxr list                    # All tickets
-tkxr list tasks              # Only tasks
-tkxr list bugs               # Only bugs
-
-# Update status
-tkxr status <ticket-id> <status>
-# Valid statuses: todo, progress, done
-
-tkxr delete <ticket-id>
-
-# Comment management
-tkxr comments <ticket-id>             # List comments
-tkxr comments <ticket-id> --add --author <user-id> --content "Comment text"   # Add comment
-```
-
-### User Management
-
-```bash
-# List all users
-tkxr users
-
-# Create a new user
-tkxr user create <username> <displayName> [--email <email>]
-
-# Examples
-tkxr user create johndoe "John Doe"
 tkxr user create alice "Alice Smith" --email alice@example.com
+tkxr user edit alice --display-name "Alice S." --email alice@example.com
+tkxr user assign tas-abc12345 alice
+tkxr user assign tas-abc12345 --unassign
 ```
 
-### Sprint Management
+### Sprints
 
 ```bash
-# List all sprints
 tkxr sprints
-
-# List sprints by status
-tkxr sprints --status active
-
-# Create a new sprint
-tkxr sprint create <name> [options]
-
-# Sprint creation options
-tkxr sprint create "Sprint 2" \
-  --description "Feature development sprint" \
-  --goal "Complete user authentication"
-
-# Update sprint status
-tkxr sprint status <sprint-id> <status>
-# Valid statuses: planning, active, completed
-
-# Examples
-tkxr sprint status spr-abc123 active
-tkxr sprint status spr-def456 completed
+tkxr sprint create "Sprint 1" --goal "Ship auth"
+tkxr sprint status spr-abc12345 active                # planning|active|completed
+tkxr sprint edit spr-abc12345 --name "Auth Sprint" --end-date 2026-08-01
+tkxr sprint set tas-abc12345 spr-abc12345             # attach ticket to sprint
+tkxr sprint set tas-abc12345 --unset                  # detach
 ```
 
-### Server Commands
+### Worktrees
+
+Per-ticket and per-sprint git worktrees let multiple agents work in parallel on isolated branches.
 
 ```bash
-# Web interface server
-tkxr serve                   # Start on localhost:8080
-tkxr serve --port 3000       # Custom port
-tkxr serve --host 0.0.0.0    # Custom host
+tkxr worktree create tas-abc12345
+# → creates ../<repo>-worktrees/tas-abc12345 on branch tkxr/tas-abc12345,
+#   based on the sprint branch if the ticket's sprint has a worktree, else HEAD.
 
-# MCP server for AI integration
-tkxr mcp                     # Start MCP server
+tkxr worktree create spr-abc12345
+# → creates ../<repo>-worktrees/sprints/spr-abc12345 on branch tkxr/sprint/spr-abc12345.
+
+tkxr worktree list
+tkxr worktree remove tas-abc12345                     # deletes the dir + branch
+tkxr worktree remove tas-abc12345 --keep-branch       # keep the branch around
+tkxr worktree remove spr-abc12345 --force
 ```
 
-## AI Integration (MCP Server)
+Options for `create`: `--path <dir>`, `--branch <name>`, `--base <ref>`.
+Options for `remove`: `--force`, `--keep-branch`.
+Override the worktree parent directory with the `TKXR_WORKTREE_ROOT` env var.
 
-tkxr includes a Model Context Protocol (MCP) server that enables AI assistants to manage tickets through standardized tool calls.
+Ticket branches default to being based on the parent sprint's branch when the sprint has its own worktree, so per-ticket branches nest cleanly under the sprint branch.
 
-### Starting the MCP Server
+### Servers
 
 ```bash
-npx tkxr mcp           # If not installed globally
-pnpm dlx tkxr mcp      # Or use pnpm dlx
-tkxr mcp               # Only if installed globally
+tkxr serve                                # web + REST + WebSocket + MCP-over-HTTP
+tkxr serve --port 3000 --host 0.0.0.0
+tkxr mcp                                  # MCP stdio server for MCP client configs
 ```
 
-### Available MCP Tools
+`serve` respects `TKXR_PORT` / `PORT` and `TKXR_HOST` env vars as fallbacks after the flags.
 
-The MCP server provides these tools for AI assistants:
+### Version
 
-- `list_tickets` - List all tickets with optional filtering
-- `create_ticket` - Create new tasks or bugs
-- `update_ticket_status` - Change ticket status
-- `delete_ticket` - Remove tickets
-- `list_users` / `create_user` - User management
-- `list_sprints` / `create_sprint` / `update_sprint_status` - Sprint management
-- `list_comments` / `add_comment` - Comment management
-
-### AI Usage Examples
-
-With the MCP server running, AI assistants can:
-
-```
-"Show me all open tasks in the current sprint"
-"Create a new bug for the login issue and assign it to John"
-"Move all completed tickets from Sprint 1 to done status"
-"Start Sprint 2 and create initial planning tasks"
+```bash
+tkxr version                              # print current version
+tkxr version --bump patch                 # patch | minor | major (updates root + web package.json)
 ```
 
-### MCP Configuration
+---
 
-Configure your AI assistant to connect to the MCP server:
+## MCP (AI integration)
+
+tkxr exposes the same functionality over the Model Context Protocol. There are two ways to connect:
+
+1. **stdio** — the `tkxr-mcp` bin. Use this in editor MCP client configs (Claude Desktop, Cursor, Zed, etc.).
+2. **HTTP** — every `tkxr serve` instance also serves MCP JSON-RPC at `/mcp`. Useful for agents that already talk HTTP or for remote setups.
+
+Both transports expose the same tools and broadcast the same WebSocket events, so a running web UI reflects agent mutations live.
+
+### Client config (stdio)
+
+Global install:
 
 ```json
 {
@@ -224,45 +243,96 @@ Configure your AI assistant to connect to the MCP server:
 }
 ```
 
-## Web Interface Features
+No global install (via `pnpm dlx`):
 
-### Dashboard
-- 📊 Overview statistics (sprint-aware)
-- 🎯 **Sprint dropdown filter** - Filter by specific sprint or "No Sprint"
-- 📋 Ticket cards with status indicators
-- 💬 Comment modal for ticket conversations
-- 🔄 Real-time updates via WebSocket
-- 📈 Dynamic stats that update based on sprint selection
+```json
+{
+  "mcpServers": {
+    "tkxr": {
+      "command": "pnpm",
+      "args": ["dlx", "@legdev/tkxr", "mcp"]
+    }
+  }
+}
+```
 
-### Sprint Filtering
-- **All Tickets** - Show everything
-- **No Sprint** - Show unassigned tickets  
-- **Active Sprints** - Filter by specific sprint (completed sprints hidden)
-- Stats and tab counts update automatically based on selected sprint
+Or via `npx`:
 
-### Ticket Management
-- ✅ Quick status updates
-- 📝 Create new tickets with rich forms
-- 🏷️ Priority and label management
-- 👤 User assignment
-- 🏃 Sprint assignment (only active/planning sprints shown)
+```json
+{
+  "mcpServers": {
+    "tkxr": {
+      "command": "npx",
+      "args": ["-y", "@legdev/tkxr", "mcp"]
+    }
+  }
+}
+```
 
-### Sprint Management
-- 🏃 **Complete sprint lifecycle**: planning → active → completed
-- 🎯 Sprint status buttons (Start, Complete, Reopen)
-- 📋 Sprint creation with description and goals
-- 🚫 Smart filtering (completed sprints hidden from ticket creation)
+### Client config (HTTP)
 
-### Visual Indicators
-- 🟦 Tasks (blue)
-- 🔴 Bugs (red)
-- 🟡 In Progress (yellow)
-- 🟢 Done (green)
-- ⚪ Todo (gray)
+Run `tkxr serve` (default `http://localhost:8080`), then point your client at `http://localhost:8080/mcp`. The endpoint speaks the MCP Streamable HTTP transport (JSON-RPC over `POST`/`GET`/`DELETE`). Session state is keyed by the `mcp-session-id` header.
 
-## File Structure
+You can also grab the tool list and the agent guide as plain REST:
 
-tkxr organizes tickets, comments, sprints, and users in your repository:
+```bash
+curl http://localhost:8080/api/mcp/tools     # JSON tool list
+curl http://localhost:8080/api/mcp/guide     # markdown agent guide
+```
+
+### Available MCP tools
+
+Read: `agent_guide`, `list_tickets`, `get_ticket`, `search_tickets`, `list_users`, `get_user`, `list_sprints`, `get_sprint`, `list_comments`, `list_worktrees`.
+
+Ticket mutations: `create_ticket`, `edit_ticket`, `update_ticket_status`, `assign_ticket`, `set_ticket_sprint`, `delete_ticket`.
+
+Comment mutations: `add_comment`, `delete_comment`.
+
+Sprint mutations: `create_sprint`, `edit_sprint`, `update_sprint_status`, `delete_sprint`.
+
+User mutations: `create_user`, `edit_user`, `delete_user`.
+
+Worktrees: `create_worktree`, `create_sprint_worktree`, `remove_worktree`.
+
+Call `agent_guide` first if you're not sure — it returns a short markdown briefing on the data model, typical flow, dependency rules, and worktree conventions.
+
+---
+
+## Suggested worktree flow
+
+For a single ticket:
+
+```bash
+tkxr worktree create tas-abc12345
+cd ../<repo>-worktrees/tas-abc12345
+tkxr status tas-abc12345 progress
+# ... work, commit on the tkxr/tas-abc12345 branch ...
+tkxr status tas-abc12345 review
+tkxr comments tas-abc12345 --add --author alice --content "Ready for review"
+```
+
+When the ticket is merged (via your normal PR flow):
+
+```bash
+tkxr worktree remove tas-abc12345
+```
+
+For a sprint (fan-out to multiple agents):
+
+```bash
+tkxr worktree create spr-abc12345
+# Each ticket in the sprint gets its own worktree, branched off the sprint branch:
+tkxr worktree create tas-111
+tkxr worktree create tas-222
+# ... agents work concurrently ...
+tkxr sprint status spr-abc12345 completed   # auto-removes the sprint worktree
+```
+
+---
+
+## File layout
+
+Inside your repo, tkxr writes:
 
 ```
 tkxr/
@@ -273,205 +343,165 @@ tkxr/
 │   ├── comments-0001.ndjson
 │   └── comments-0002.ndjson
 ├── sprints.json
-├── users.json
+└── users.json
 ```
 
-### Example Files
+Example NDJSON ticket line:
 
-#### Ticket (NDJSON)
-Each line is a JSON object:
-{"id":"tas-12AbCdEfGh","type":"task","title":"Implement user authentication","description":"Add user authentication system...","status":"progress","assignee":"usr-98XyZaBc","sprint":"spr-45FgHiJk","estimate":8,"priority":"high","createdAt":"2026-02-19T10:30:00.000Z","updatedAt":"2026-02-19T14:15:00.000Z"}
+```json
+{"id":"tas-abc12345","type":"task","title":"Wire up login","status":"progress","assignee":"use-alice001","sprint":"spr-abc12345","estimate":3,"priority":"high","dependsOn":[],"worktree":{"path":"...","branch":"tkxr/tas-abc12345","createdAt":"..."},"createdAt":"...","updatedAt":"..."}
+```
 
-#### Sprint (JSON)
+Example user:
+
+```json
 {
-  "id": "spr-45FgHiJk",
-  "name": "Sprint 1 - Authentication",
-  "description": "Implement core authentication features",
-  "status": "active",
-  "goal": "Complete user login and registration",
-  "createdAt": "2026-02-19T09:00:00.000Z",
-  "updatedAt": "2026-02-19T11:00:00.000Z"
+  "id": "use-alice001",
+  "username": "alice",
+  "displayName": "Alice Smith",
+  "email": "alice@example.com",
+  "color": "#e0864a",
+  "createdAt": "...",
+  "updatedAt": "..."
 }
-
-#### User (JSON)
-{
-  "id": "usr-98XyZaBc",
-  "username": "johndoe",
-  "displayName": "John Doe",
-  "email": "john@example.com",
-  "createdAt": "2026-02-19T08:00:00.000Z",
-  "updatedAt": "2026-02-19T08:00:00.000Z"
-}
-#### Comment (NDJSON)
-Each line is a JSON object:
-{"id":"com-1a2b3c4d","ticketId":"tas-12AbCdEfGh","author":"usr-98XyZaBc","content":"This is a comment","createdAt":"2026-02-19T12:00:00.000Z"}
-
-## Advanced Usage
-# Comment workflows
-tkxr comments tas-12AbCdEf --add --author johndoe --content "Ready for review"
-tkxr comments tas-12AbCdEf           # List all comments for ticket
-
-### Sprint Workflow
-
-```bash
-# Complete sprint lifecycle
-tkxr sprint create "Sprint 1" --goal "Complete MVP"
-tkxr sprint status spr-abc123 active
-tkxr create task "Add login" --sprint spr-abc123
-tkxr create task "Add dashboard" --sprint spr-abc123
-# ... work on tickets ...
-tkxr sprint status spr-abc123 completed
-
-# Planning next sprint
-tkxr sprint create "Sprint 2" --goal "User management"
-# Only active/planning sprints appear in ticket creation
 ```
 
-### Integration with Git
+---
 
-Since tickets are files, they integrate naturally with Git:
+## REST API
 
-```bash
-# Track ticket changes
-git add tickets/
-git commit -m "Add feature tickets for sprint 1"
-
-# Branch-specific tickets
-git checkout feature/auth
-tkxr create task "Add OAuth integration"
-
-# Review ticket history
-git log --follow tickets/tasks/tas-12345678.yaml
-```
-
-### AI-Powered Workflows
-
-```bash
-# Start MCP server for AI integration
-tkxr mcp
-
-# AI can now:
-# - Analyze ticket backlogs
-# - Create tickets from requirements
-# - Update sprint progress
-# - Generate reports
-# - Manage assignments
-```
-
-## API Reference
-# Comments
-GET  /api/comments/:ticketId         # List comments for ticket
-POST /api/comments/:ticketId         # Add comment to ticket
-
-### REST API
-
-When running `tkxr serve`, the following API endpoints are available:
+`tkxr serve` exposes REST alongside the web UI, MCP, and WebSocket. Endpoints:
 
 ```
 # Tickets
-GET  /api/tickets                    # All tickets
-GET  /api/tickets/:type              # Tickets by type (task/bug)
-POST /api/tickets                    # Create ticket
-PUT  /api/tickets/:id/status         # Update ticket status
-DELETE /api/tickets/:id              # Delete ticket
+GET    /api/tickets
+GET    /api/tickets/:type                (task|bug)
+POST   /api/tickets
+PUT    /api/tickets/:id
+PUT    /api/tickets/:id/status
+DELETE /api/tickets/:id
+
+# Comments
+GET    /api/tickets/:ticketId/comments
+POST   /api/tickets/:ticketId/comments
+DELETE /api/comments/:id
 
 # Users
-GET  /api/users                      # All users
-POST /api/users                      # Create user
-DELETE /api/users/:id               # Delete user
+GET    /api/users
+POST   /api/users
+PUT    /api/users/:id
+DELETE /api/users/:id
 
 # Sprints
-GET  /api/sprints                    # All sprints
-POST /api/sprints                    # Create sprint
-PUT  /api/sprints/:id/status         # Update sprint status
-DELETE /api/sprints/:id              # Delete sprint
+GET    /api/sprints
+POST   /api/sprints
+PUT    /api/sprints/:id
+PUT    /api/sprints/:id/status
+DELETE /api/sprints/:id
+
+# Worktrees
+GET    /api/worktrees
+POST   /api/tickets/:id/worktree
+DELETE /api/tickets/:id/worktree
+POST   /api/sprints/:id/worktree
+DELETE /api/sprints/:id/worktree
+
+# MCP over HTTP
+POST   /mcp
+GET    /mcp
+DELETE /mcp
+GET    /api/mcp/tools                    (plain tool list)
+GET    /api/mcp/guide                    (markdown agent guide)
+
+# AI stubs (return scaffolded responses until wired to a model)
+POST   /api/ai/ask
+POST   /api/ai/create
+POST   /api/ai/triage
+POST   /api/ai/plan
+
+# Server metadata
+GET    /api/config                       ({ host, port, url, version })
 ```
 
-### WebSocket Events
+### WebSocket
 
-```javascript
-// Connect to WebSocket
-const ws = new WebSocket('ws://localhost:8080/ws');
-
-// Listen for updates
-ws.onmessage = (event) => {
-  const message = JSON.parse(event.data);
-  console.log('Update:', message.type, message.data);
+```js
+const ws = new WebSocket('ws://localhost:8080');
+ws.onmessage = (ev) => {
+  const { type, data } = JSON.parse(ev.data);
+  // type ∈ ticket_created | ticket_updated | ticket_deleted
+  //      | comment_created | comment_deleted
+  //      | sprint_created | sprint_updated | sprint_deleted
+  //      | user_created | user_updated | user_deleted
 };
 ```
 
+---
+
 ## Configuration
-# Server Configuration
 
-The `.env.tkxr` file is dynamically created by the web UI server. It stores the host, port, and URL for the web interface (default: http://localhost:8080) in standard dotenv format:
+`tkxr serve` dynamically writes `.tkxr-server` in its cwd with the host, port, and URL for the running web UI (default: `http://localhost:8080`) as JSON, so the notifier client, the Vite dev proxy, the CLI, MCP tools, and any other tooling can discover where the running server lives:
 
+```json
+{
+  "host": "localhost",
+  "port": 8080,
+  "url": "http://localhost:8080"
+}
 ```
-TKXR_HOST=localhost
-TKXR_PORT=8080
-```
 
-You can override the web UI port by editing `.env.tkxr`, using CLI flags:
+The file is cleaned up on `SIGINT` shutdown. CLI/MCP commands also honor `TKXR_HOST` / `TKXR_PORT` (or `TKXR_SERVER_URL`) as env fallbacks when no `.tkxr-server` file is present.
+
+Override any of these with flags or env vars:
+
+- `--port <n>` / `TKXR_PORT` / `PORT`
+- `--host <h>` / `TKXR_HOST`
+- `TKXR_SERVER_URL` — full override for CLI/MCP when discovering a running server.
+- `TKXR_WORKTREE_ROOT` — override the parent directory used for created worktrees.
 
 ```bash
-pnpm dlx tkxr serve --port 3000
+pnpm dlx @legdev/tkxr serve --port 3000
 ```
-### Development
+
+---
+
+## Development
 
 ```bash
-# Clone and develop
-git clone <repo>
+git clone https://github.com/<your-fork>/tkxr
 cd tkxr
-npm install
+pnpm install
 
-# Build CLI and web interface
-npm run build
+# CLI + MCP (TypeScript)
+pnpm run build:cli       # compiles src/ → dist/
+pnpm run dev             # tsc --watch
 
-# Develop web interface
-cd src/web
-npm install
-npm run dev
+# Web UI (Svelte + Vite, workspace package `tkxr-web`)
+pnpm run dev:web         # Vite dev server
+pnpm run build:web       # production build
 
-# Test MCP server
-npm run build
-tkxr mcp
+# Everything
+pnpm run build           # CLI + web + copy package.json into dist/
+pnpm run typecheck
+
+# Run locally against your built dist
+pnpm run serve           # tkxr serve
+pnpm run mcp             # tkxr mcp
 ```
+
+---
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m 'Add amazing feature'`
-4. Push to the branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
+1. Fork.
+2. `git checkout -b feature/thing` (or let tkxr do it: `tkxr worktree create tas-…`).
+3. Commit on your branch.
+4. Open a PR.
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for a detailed history of all notable changes.
-
-### Recent Highlights
-- Automated patch version bump and sync for root and web package.json on each build
-- Version badge in web UI now reflects actual package version
-- CLI command added for manual version bump and sync
-- Changelog is updated automatically with each build
-- Complete Sprint button bug fixed
-
-## Version Management
-
-### Automatic Patch Bump
-Every build automatically bumps the patch version and syncs both root and web package.json files. This is handled by the `scripts/bump-version.js` script, which also updates the changelog.
-
-### Manual Version Control
-You can manually bump the patch, minor, or major version using the CLI:
-
-```bash
-node dist/cli/index.js version --bump patch   # Patch bump
-node dist/cli/index.js version --bump minor   # Minor bump
-node dist/cli/index.js version --bump major   # Major bump
-node dist/cli/index.js version                # Show current version
-```
-
-Both methods keep the root and web package.json files in sync.
+See [CHANGELOG.md](CHANGELOG.md).
