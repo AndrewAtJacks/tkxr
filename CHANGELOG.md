@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.1] - 2026-07-16
+
+### Fixed
+- MCP over HTTP: each session gets its own `McpServer` instance instead
+  of sharing one across all `StreamableHTTPServerTransport` connections.
+  Fixes tangled request-handler state when multiple MCP clients connect
+  concurrently.
+
+### Packaging
+- Ship `CHANGELOG.md` in the published tarball (added to `files`).
+- Explicitly list `LICENSE` in `files` (was auto-included).
+
 ## [2.0.0] - 2026-07-16
 
 First semver-major release. Kills the modal-based UI, ships MCP-over-HTTP
