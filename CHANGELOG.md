@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.4] - 2026-07-16
+### Changed
+- Patch version bumped automatically during build.
+
 ## [2.1.3] - 2026-07-16
 ### Changed
 - Patch version bumped automatically during build.

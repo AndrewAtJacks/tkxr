@@ -310,6 +310,22 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
+  // Single-ticket lookup by id. Panels open by id from stores that only hold
+  // a paged slice (Board columns, main paged list) — a ticket outside the
+  // loaded page used to render as null → TicketPanel showed "undefined".
+  // Registered BEFORE `/api/tickets/:type` so Express doesn't route the id
+  // path through the type handler.
+  app.get('/api/tickets/id/:id', async (req, res) => {
+    try {
+      await storage.loadProject();
+      const found = await storage.findTicket(req.params.id);
+      if (!found) return res.status(404).json({ error: 'Ticket not found' });
+      res.json(found.ticket);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to load ticket' });
+    }
+  });
+
   app.get('/api/tickets/:type', async (req, res) => {
     try {
       const { type } = req.params;

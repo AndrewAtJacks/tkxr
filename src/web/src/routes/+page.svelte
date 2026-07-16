@@ -28,6 +28,7 @@
   import ClaudeRunPanel from '../lib/ClaudeRunPanel.svelte';
   import CommandPalette from '../lib/CommandPalette.svelte';
   import Toaster from '../lib/Toaster.svelte';
+  import { normalizeTicket } from '../lib/util';
 
   type Panel = null | 'ticket' | 'sprint' | 'user' | 'triage';
   let view: 'board' | 'list' = 'board';
@@ -41,6 +42,10 @@
   let selectedTicketId: string | null = null;
   let selectedSprintId: string | null = null;
   let selectedUserId: string | null = null;
+  // Fallback for tickets not in the current paged slice (Board columns +
+  // main list each hold their own page; `$ticketStore` mirrors only the main
+  // page). Populated via `/api/tickets/id/:id` before mounting the panel.
+  let openedTicket: Ticket | null = null;
   let paletteOpen = false;
   let version = '';
   let commentCounts: Record<string, number> = {};
@@ -301,9 +306,21 @@
   })();
 
   // Panel actions
-  function openTicket(id: string) {
-    selectedTicketId = id;
+  async function openTicket(id: string) {
     isCreate = false;
+    // Resolve the ticket before mounting the panel so TicketPanel initializes
+    // its draft from real data. If we set selectedTicketId first, {#key ...}
+    // remounts with `ticket=null` and the draft locks in as empty ("undefined"
+    // fields) even after the fetch resolves.
+    let t = ($ticketStore as Ticket[]).find(x => x.id === id) || null;
+    if (!t) {
+      try {
+        const res = await fetch(`/api/tickets/id/${encodeURIComponent(id)}`);
+        if (res.ok) t = normalizeTicket(await res.json()) as Ticket;
+      } catch { /* noop */ }
+    }
+    openedTicket = t;
+    selectedTicketId = id;
     panel = 'ticket';
   }
   function newTicket() {
@@ -339,10 +356,14 @@
     selectedTicketId = null;
     selectedSprintId = null;
     selectedUserId = null;
+    openedTicket = null;
     isCreate = false;
   }
 
-  $: activeTicket = selectedTicketId ? ($ticketStore as Ticket[]).find(t => t.id === selectedTicketId) || null : null;
+  $: activeTicket = selectedTicketId
+    ? (($ticketStore as Ticket[]).find(t => t.id === selectedTicketId)
+        || (openedTicket && openedTicket.id === selectedTicketId ? openedTicket : null))
+    : null;
   $: activeSprintSel = selectedSprintId ? ($sprintStore as Sprint[]).find(s => s.id === selectedSprintId) || null : null;
   $: activeUserSel = selectedUserId ? ($userStore as User[]).find(u => u.id === selectedUserId) || null : null;
 </script>
