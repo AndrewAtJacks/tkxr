@@ -1,6 +1,6 @@
 export type TicketType = 'task' | 'bug';
 export type SprintStatus = 'planning' | 'active' | 'completed';
-export type TicketStatus = 'todo' | 'progress' | 'done';
+export type TicketStatus = 'backlog' | 'progress' | 'review' | 'blocked' | 'done';
 
 export interface BaseEntity {
   id: string;
@@ -12,6 +12,7 @@ export interface User extends BaseEntity {
   username: string;
   displayName: string;
   email?: string;
+  color?: string;
 }
 
 export interface Sprint extends BaseEntity {
@@ -21,6 +22,13 @@ export interface Sprint extends BaseEntity {
   startDate?: Date;
   endDate?: Date;
   goal?: string;
+  worktree?: TicketWorktree | null;
+}
+
+export interface TicketWorktree {
+  path: string;
+  branch: string;
+  createdAt: string;
 }
 
 export interface Ticket extends BaseEntity {
@@ -33,6 +41,7 @@ export interface Ticket extends BaseEntity {
   estimate?: number; // Story points or hours
   labels?: string[];
   priority?: 'low' | 'medium' | 'high' | 'critical';
+  worktree?: TicketWorktree | null;
 }
 
 export interface TicketComment extends BaseEntity {

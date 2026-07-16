@@ -19,6 +19,7 @@ import { manageSprint } from './commands/sprint.js';
 import { startMCPServer } from './commands/mcp.js';
 import { manageComments } from './commands/comments.js';
 import { manageVersion } from './commands/version.js';
+import { manageWorktree } from './commands/worktree.js';
 
 interface Args extends minimist.ParsedArgs {
   _: string[];
@@ -41,6 +42,7 @@ const commands = {
   comments: manageComments,
   mcp: startMCPServer,
   version: manageVersion,
+  worktree: manageWorktree,
   new: createTicket, // Alias for create
 };
 
@@ -59,12 +61,12 @@ function showHelp() {
   console.log('      --search, -s <term>   Search tickets by title, description, or ID');
   console.log('      --sort-by <field>     Sort by: title, status, priority, created, updated');
   console.log('      --order <order>       Sort order: asc, desc (default: desc)');
-  console.log('      --status <status>     Filter by status: todo, progress, done');
+  console.log('      --status <status>     Filter by status: backlog, progress, review, blocked, done');
   console.log('      --assignee <id>       Filter by assignee ID');
   console.log('      --sprint <id>         Filter by sprint ID');
   console.log('      --verbose, -v         Show assignee and sprint names');
   console.log('  delete <id>               Delete a ticket, sprint, user, or comment');
-  console.log('  status <id> <status>      Update ticket status (todo, progress, done)');
+  console.log('  status <id> <status>      Update ticket status (backlog, progress, review, blocked, done)');
   console.log('  edit <id> [options]       Edit ticket fields');
   console.log('    --title <text>          New title');
   console.log('    --description <text>    New description (or --clear-description)');
@@ -95,11 +97,18 @@ function showHelp() {
   console.log('  sprint edit <id> [opts]            Edit sprint (name/desc/goal/dates)');
   console.log();
   console.log(chalk.green('Server Commands:'));
-  console.log('  serve                     Start web interface server');
+  console.log('  serve                     Start web + REST + MCP-over-HTTP server');
   console.log('    Options:');
   console.log('      --port <number>       Server port (default: 8080)');
+  console.log('                              Env fallback: TKXR_PORT, PORT');
   console.log('      --host <string>       Server host (default: localhost)');
-  console.log('  mcp                       Start MCP server for AI integration');
+  console.log('                              Env fallback: TKXR_HOST');
+  console.log('  mcp                       Start MCP stdio server (for MCP client configs)');
+  console.log();
+  console.log(chalk.green('Worktree Commands:'));
+  console.log('  worktree create <id>      Create a git worktree + branch for a ticket');
+  console.log('  worktree remove <id>      Remove the worktree associated with a ticket');
+  console.log('  worktree list             List all git worktrees in this repo');
   console.log();
   console.log(chalk.green('Version Commands:'));
   console.log('  version                   Show current version');

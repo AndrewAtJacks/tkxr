@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type minimist from 'minimist';
-import { TKXRMCPServer } from '../../mcp/server.js';
+import { runMcpStdio } from '../../mcp/server.js';
 
 interface McpArgs extends minimist.ParsedArgs {
   _: string[];
@@ -20,8 +20,7 @@ export async function startMCPServer(args: McpArgs): Promise<void> {
     console.error(chalk.gray('MCP server allows AI assistants to manage tickets through CLI commands'));
     console.error();
 
-    const server = new TKXRMCPServer();
-    await server.run();
+    await runMcpStdio();
 
     // This line should never be reached since MCP servers run indefinitely
     console.error(chalk.green('MCP server started successfully'));

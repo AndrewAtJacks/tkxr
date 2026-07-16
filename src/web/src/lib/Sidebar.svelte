@@ -1,0 +1,431 @@
+<script lang="ts">
+  import { createEventDispatcher } from 'svelte';
+  import type { Sprint, User, Ticket } from './stores';
+  import { avatarColorFor, initials, sprintDotColor } from './util';
+  import { theme } from './theme';
+  import { draggingTicketId } from './drag';
+  import Search from './icons/Search.svelte';
+  import Sparkles from './icons/Sparkles.svelte';
+  import Columns from './icons/Columns.svelte';
+  import List from './icons/List.svelte';
+  import Plus from './icons/Plus.svelte';
+  import Filter from './icons/Filter.svelte';
+  import Sun from './icons/Sun.svelte';
+  import Moon from './icons/Moon.svelte';
+
+  export let version = '';
+  export let view: 'board' | 'list' = 'board';
+  export let activeSprint: string = 'all';
+  export let activeUser: string = 'all';
+  export let sprints: Sprint[] = [];
+  export let users: User[] = [];
+  export let tickets: Ticket[] = [];
+  export let triageCount = 0;
+  export let panel: string | null = null;
+
+  const dispatch = createEventDispatcher();
+
+  let dragOverKey: string | null = null;
+
+  $: totalCount = tickets.length;
+  $: sprintCounts = new Map(sprints.map(s => [s.id, tickets.filter(t => t.sprint === s.id).length]));
+  $: userCounts = new Map(users.map(u => [u.id, tickets.filter(t => t.assignee === u.id).length]));
+
+  function selectView(v: 'board' | 'list') { dispatch('view', v); }
+  function selectAllSprints() { dispatch('sprint', 'all'); }
+  function openSprintPanel(id: string) { dispatch('manageSprint', id); }
+  function toggleSprintFilter(id: string) {
+    dispatch('sprint', activeSprint === id ? 'all' : id);
+  }
+  function selectAllUsers() { dispatch('user', 'all'); }
+  function openUserPanel(id: string) { dispatch('manageUser', id); }
+  function toggleUserFilter(id: string) {
+    dispatch('user', activeUser === id ? 'all' : id);
+  }
+  function openPalette() { dispatch('palette'); }
+  function openTriage() { dispatch('triage'); }
+  function newSprint() { dispatch('newSprint'); }
+  function newUser() { dispatch('newUser'); }
+
+  async function persistTicket(id: string, patch: any) {
+    try {
+      const res = await fetch(`/api/tickets/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (res.ok) dispatch('reload');
+    } catch (e) { /* noop */ }
+  }
+
+  function onDrop(kind: 'all-sprint' | 'sprint' | 'all-user' | 'user', id?: string) {
+    return async (e: DragEvent) => {
+      e.preventDefault();
+      dragOverKey = null;
+      const tid = $draggingTicketId;
+      draggingTicketId.set(null);
+      if (!tid) return;
+      if (kind === 'all-sprint') await persistTicket(tid, { sprint: null });
+      else if (kind === 'sprint') await persistTicket(tid, { sprint: id });
+      else if (kind === 'all-user') await persistTicket(tid, { assignee: null });
+      else if (kind === 'user') await persistTicket(tid, { assignee: id });
+    };
+  }
+  function onDragOver(key: string) {
+    return (e: DragEvent) => { e.preventDefault(); dragOverKey = key; };
+  }
+  function onDragLeave() { dragOverKey = null; }
+
+  function rowStyle(active: boolean, dragKey: string): string {
+    const dragging = dragOverKey === dragKey;
+    const bg = dragging
+      ? 'rgba(76,141,255,.13)'
+      : active ? 'var(--nav-active)' : 'transparent';
+    const shadow = dragging ? 'box-shadow: inset 0 0 0 1px #4c8dff;' : '';
+    const color = active ? 'var(--text)' : 'var(--muted)';
+    const weight = active ? 600 : 400;
+    return `display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;background:${bg};color:${color};font-weight:${weight};font-size:12.5px;cursor:pointer;${shadow}`;
+  }
+  function navStyle(active: boolean): string {
+    return `display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:7px;background:${active ? 'var(--nav-active)' : 'transparent'};color:${active ? 'var(--text)' : 'var(--muted)'};font-weight:${active ? 600 : 500};font-size:12.5px;border:none;cursor:pointer;text-align:left;width:100%;`;
+  }
+</script>
+
+<aside class="sidebar">
+  <div class="brand">
+    <div class="logo">t</div>
+    <span class="name">tkxr</span>
+    {#if version}<span class="ver">{version}</span>{/if}
+  </div>
+
+  <button class="search-btn" on:click={openPalette}>
+    <Search size={14} />
+    <span>Search or ask…</span>
+    <span class="kbd">⌘K</span>
+  </button>
+
+  <nav class="nav">
+    <button style={navStyle(view === 'board' && !panel)} on:click={() => selectView('board')}>
+      <Columns size={15} />
+      <span>Board</span>
+    </button>
+    <button style={navStyle(view === 'list' && !panel)} on:click={() => selectView('list')}>
+      <List size={15} />
+      <span>List</span>
+    </button>
+    <button style={navStyle(panel === 'triage')} on:click={openTriage}>
+      <Sparkles size={15} />
+      <span>AI Triage</span>
+      {#if triageCount > 0}
+        <span class="triage-pill">{triageCount}</span>
+      {/if}
+    </button>
+  </nav>
+
+  <div class="section-label">
+    <span>Sprints</span>
+    <button class="icon-btn" title="New sprint" on:click={newSprint}><Plus size={12} /></button>
+  </div>
+  <div class="section-list" style="max-height:200px">
+    <button
+      style={rowStyle(activeSprint === 'all' && !panel, 'all-sprint')}
+      on:click={selectAllSprints}
+      on:dragover={onDragOver('all-sprint')}
+      on:dragleave={onDragLeave}
+      on:drop={onDrop('all-sprint')}
+    >
+      <span class="dot" style="background:var(--faint)"></span>
+      <span class="row-label">All tickets</span>
+      <span class="mono count">{totalCount}</span>
+    </button>
+    {#each sprints as sp (sp.id)}
+      <div
+        class="row"
+        role="button"
+        tabindex="-1"
+        style={dragOverKey === `sp:${sp.id}` ? 'background:rgba(76,141,255,.13);box-shadow:inset 0 0 0 1px #4c8dff;' : ''}
+        on:dragover={onDragOver(`sp:${sp.id}`)}
+        on:dragleave={onDragLeave}
+        on:drop={onDrop('sprint', sp.id)}
+      >
+        <button
+          class="row-main"
+          style="color:{activeSprint === sp.id ? 'var(--text)' : 'var(--muted)'};font-weight:{activeSprint === sp.id ? 600 : 400};background:{activeSprint === sp.id ? 'var(--nav-active)' : 'transparent'}"
+          title="Open sprint"
+          on:click={() => openSprintPanel(sp.id)}
+        >
+          <span class="dot" style="background:{sprintDotColor(sp.status)}"></span>
+          <span class="row-label">{sp.name}</span>
+        </button>
+        <span class="mono count">{sprintCounts.get(sp.id) || 0}</span>
+        <button
+          class="filter-btn"
+          class:active={activeSprint === sp.id}
+          title={activeSprint === sp.id ? 'Clear sprint filter' : 'Filter board to this sprint'}
+          on:click={() => toggleSprintFilter(sp.id)}
+        >
+          <Filter size={11} />
+        </button>
+      </div>
+    {/each}
+  </div>
+
+  <div class="section-label">
+    <span>People</span>
+    <button class="icon-btn" title="Add person" on:click={newUser}><Plus size={12} /></button>
+  </div>
+  <div class="section-list" style="flex:1;padding-bottom:8px">
+    <button
+      style={rowStyle(activeUser === 'all' && !panel, 'all-user')}
+      on:click={selectAllUsers}
+      on:dragover={onDragOver('all-user')}
+      on:dragleave={onDragLeave}
+      on:drop={onDrop('all-user')}
+    >
+      <span class="avatar" style="background:var(--chip);color:var(--muted);font-weight:600">∗</span>
+      <span class="row-label">Everyone</span>
+    </button>
+    {#each users as u, i (u.id)}
+      <div
+        class="row"
+        role="button"
+        tabindex="-1"
+        style={dragOverKey === `u:${u.id}` ? 'background:rgba(76,141,255,.13);box-shadow:inset 0 0 0 1px #4c8dff;' : ''}
+        on:dragover={onDragOver(`u:${u.id}`)}
+        on:dragleave={onDragLeave}
+        on:drop={onDrop('user', u.id)}
+      >
+        <button
+          class="row-main"
+          style="color:{activeUser === u.id ? 'var(--text)' : 'var(--muted)'};font-weight:{activeUser === u.id ? 600 : 400};background:{activeUser === u.id ? 'var(--nav-active)' : 'transparent'}"
+          title="Open person"
+          on:click={() => openUserPanel(u.id)}
+        >
+          <span class="avatar" style="background:{avatarColorFor(u, i)};color:#0b0e12">{initials(u.displayName)}</span>
+          <span class="row-label">{u.displayName}</span>
+        </button>
+        <span class="mono count">{userCounts.get(u.id) || 0}</span>
+        <button
+          class="filter-btn"
+          class:active={activeUser === u.id}
+          title={activeUser === u.id ? 'Clear person filter' : 'Filter board to this person'}
+          on:click={() => toggleUserFilter(u.id)}
+        >
+          <Filter size={11} />
+        </button>
+      </div>
+    {/each}
+  </div>
+
+  <div class="footer">
+    <span class="avatar footer-avatar" style="background:{avatarColorFor({ id: 'self', color: '#4c8dff' })};color:#0b0e12">t</span>
+    <div class="footer-meta">
+      <div class="footer-name">You</div>
+      <div class="footer-handle">@you</div>
+    </div>
+    <span class="live-dot" title="Live"></span>
+    <button class="theme-btn" title="Toggle theme" on:click={() => theme.toggle()}>
+      {#if $theme === 'dark'}<Sun size={14} />{:else}<Moon size={14} />{/if}
+    </button>
+  </div>
+</aside>
+
+<style>
+  .sidebar {
+    width: 238px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    height: 100%;
+  }
+  .brand {
+    padding: 16px 16px 12px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .logo {
+    width: 26px; height: 26px;
+    border-radius: 7px;
+    background: linear-gradient(135deg, #4c8dff, #6b5bff);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'IBM Plex Mono';
+    font-weight: 600;
+    font-size: 13px;
+    color: #fff;
+  }
+  .name { font-weight: 600; font-size: 15px; letter-spacing: -.01em; }
+  .ver {
+    font-family: 'IBM Plex Mono';
+    font-size: 10px;
+    color: var(--faint);
+    background: var(--card);
+    padding: 2px 6px;
+    border-radius: 5px;
+  }
+  .search-btn {
+    margin: 2px 12px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12.5px;
+    transition: background .12s, border-color .12s, color .12s;
+  }
+  .search-btn:hover {
+    background: var(--surface-hover);
+    border-color: var(--border-hover);
+    color: var(--text2);
+  }
+  .search-btn > span:first-of-type { flex: 1; text-align: left; }
+  .kbd {
+    font-family: 'IBM Plex Mono';
+    font-size: 10px;
+    background: var(--border-subtle);
+    padding: 2px 5px;
+    border-radius: 4px;
+    color: var(--faint);
+  }
+  .nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 8px;
+  }
+  .triage-pill {
+    margin-left: auto;
+    font-size: 9px;
+    font-family: 'IBM Plex Mono';
+    color: #6b5bff;
+    background: rgba(107,91,255,.12);
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
+  .section-label {
+    padding: 18px 16px 6px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--faint);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .icon-btn {
+    width: 18px; height: 18px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    color: var(--faint);
+    cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--surface); color: var(--text); }
+  .section-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 0 8px;
+    overflow-y: auto;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    border-radius: 6px;
+  }
+  .row-main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 6px;
+    font-size: 12.5px;
+    cursor: pointer;
+    text-align: left;
+    background: transparent;
+  }
+  .row-main:hover { background: var(--surface); color: var(--text); }
+  .row-label {
+    flex: 1;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dot {
+    width: 7px; height: 7px;
+    border-radius: 2px;
+    flex: none;
+  }
+  .avatar {
+    width: 20px; height: 20px;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9.5px;
+    font-weight: 600;
+    color: #0b0e12;
+    flex: none;
+  }
+  .count {
+    font-family: 'IBM Plex Mono';
+    font-size: 10px;
+    color: var(--faint);
+    padding: 0 6px;
+  }
+  .filter-btn {
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    color: var(--faint);
+    cursor: pointer;
+    margin-right: 2px;
+    opacity: 0;
+    transition: opacity .12s, background .12s, color .12s;
+  }
+  .row:hover .filter-btn { opacity: 1; }
+  .filter-btn:hover { background: var(--chip); color: var(--text); }
+  .filter-btn.active {
+    opacity: 1;
+    color: var(--accent);
+    background: rgba(76,141,255,.12);
+  }
+  .footer {
+    border-top: 1px solid var(--border-subtle);
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .footer-avatar { width: 22px; height: 22px; }
+  .footer-meta { flex: 1; min-width: 0; }
+  .footer-name { font-size: 11.5px; font-weight: 600; color: var(--text); }
+  .footer-handle { font-size: 10px; color: var(--faint); font-family: 'IBM Plex Mono'; }
+  .live-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #46c17f;
+    box-shadow: 0 0 6px rgba(70,193,127,.6);
+  }
+  .theme-btn {
+    width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .theme-btn:hover { background: var(--surface); color: var(--text); }
+</style>

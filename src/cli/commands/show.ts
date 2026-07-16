@@ -59,8 +59,10 @@ async function renderTicket(storage: any, ticket: Ticket): Promise<void> {
   };
 
   const statusColors: Record<TicketStatus, (text: string) => string> = {
-    todo: chalk.gray,
+    backlog: chalk.gray,
     progress: chalk.yellow,
+    review: chalk.blue,
+    blocked: chalk.red,
     done: chalk.green,
   };
 

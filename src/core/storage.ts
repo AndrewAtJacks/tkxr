@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { nanoid } from 'nanoid';
 import type { Ticket, Sprint, User, TicketType, TicketComment } from './types.js';
+import { isGitRepo, removeWorktree } from './worktree.js';
 
 export class ProjectStorage {
   private ticketsDir: string;
@@ -70,7 +71,7 @@ export class ProjectStorage {
     return true;
   }
 
-  async updateUser(id: string, updates: Partial<Pick<User, 'username' | 'displayName' | 'email'>>): Promise<User | null> {
+  async updateUser(id: string, updates: Partial<Pick<User, 'username' | 'displayName' | 'email' | 'color'>>): Promise<User | null> {
     const users = await this.getUsers();
     const user = users.find(u => u.id === id);
     if (!user) return null;
@@ -127,7 +128,7 @@ export class ProjectStorage {
     return sprint;
   }
 
-  async updateSprint(id: string, updates: Partial<Pick<Sprint, 'name' | 'description' | 'goal' | 'startDate' | 'endDate'>>): Promise<Sprint | null> {
+  async updateSprint(id: string, updates: Partial<Pick<Sprint, 'name' | 'description' | 'goal' | 'startDate' | 'endDate' | 'status' | 'worktree'>>): Promise<Sprint | null> {
     const sprints = await this.getSprints();
     const sprint = sprints.find(s => s.id === id);
     if (!sprint) return null;
@@ -166,11 +167,12 @@ export class ProjectStorage {
       id: this.generateId(type),
       type,
       title,
-      status: 'todo',
+      status: 'backlog',
       createdAt: now,
       updatedAt: now,
       ...options,
     };
+    if (ticket.estimate === undefined) ticket.estimate = 1;
     const chunkFiles = await this.getTicketChunkFiles();
     let chunkFile = chunkFiles[chunkFiles.length - 1];
     if (!chunkFile) {
@@ -201,6 +203,7 @@ export class ProjectStorage {
         const t = JSON.parse(line);
         return {
           ...t,
+          status: t.status === 'todo' ? 'backlog' : t.status,
           createdAt: new Date(t.createdAt),
           updatedAt: new Date(t.updatedAt),
         };
@@ -369,15 +372,54 @@ export class ProjectStorage {
       const newLines = lines.map(line => {
         const t = JSON.parse(line);
         if (t.id === id) {
-          updatedTicket = { ...t, ...updates, updatedAt: new Date() };
-          return JSON.stringify(updatedTicket);
+          const next: Ticket = { ...t, ...updates, updatedAt: new Date() };
+          updatedTicket = next;
+          return JSON.stringify(next);
         }
         return line;
       });
       await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
       if (updatedTicket) break;
     }
+
+    // Auto-close ticket worktree when moved to done (best effort, never blocks the status change).
+    const done = updatedTicket as Ticket | null;
+    if (done && done.status === 'done' && done.worktree && updates.worktree === undefined) {
+      const wt = done.worktree;
+      try {
+        if (await isGitRepo()) {
+          await removeWorktree({ path: wt.path, branch: wt.branch, force: false, keepBranch: false });
+          // Success — clear the reference in a second write.
+          updatedTicket = await this._clearWorktreeField(id, done) || done;
+        }
+      } catch {
+        // Worktree dirty / already gone / branch has unpushed work — leave ticket.worktree as-is
+        // so the human sees "still has a worktree" and can decide.
+      }
+    }
+
     return updatedTicket;
+  }
+
+  private async _clearWorktreeField(id: string, ticket: Ticket): Promise<Ticket | null> {
+    const chunkFiles = await this.getTicketChunkFiles();
+    let updated: Ticket | null = null;
+    for (const file of chunkFiles) {
+      const filePath = path.join(this.ticketsDir, file);
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      const newLines = lines.map(line => {
+        const t = JSON.parse(line);
+        if (t.id === id) {
+          updated = { ...t, worktree: null, updatedAt: new Date() };
+          return JSON.stringify(updated);
+        }
+        return line;
+      });
+      await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
+      if (updated) break;
+    }
+    return updated;
   }
 
   // Update ticket status
