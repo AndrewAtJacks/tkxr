@@ -1,8 +1,78 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { nanoid } from 'nanoid';
-import type { Ticket, Sprint, User, TicketType, TicketComment } from './types.js';
+import type { Ticket, Sprint, User, TicketType, TicketStatus, TicketComment } from './types.js';
 import { isGitRepo, removeWorktree } from './worktree.js';
+
+// --- queryTickets support -----------------------------------------------------
+// Kept in this file (rather than types.ts) because they describe the *storage*
+// query surface, not the persisted data model. The HTTP handler in serve.ts
+// re-exports the client-facing response shape from here.
+
+export type TicketSortBy = 'updated' | 'created' | 'priority' | 'title';
+
+export interface TicketQueryOptions {
+  limit?: number;
+  cursor?: string;
+  q?: string;
+  /** Sprint id, the literal `'none'` to match unassigned-to-sprint, or omitted. */
+  sprint?: string;
+  /** User id, the literal `'none'` to match unassigned, or omitted. */
+  assignee?: string;
+  type?: TicketType;
+  status?: TicketStatus;
+  sortBy?: TicketSortBy;
+}
+
+export interface TicketQueryResult {
+  items: Ticket[];
+  nextCursor: string | null;
+  total: number;
+}
+
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+
+// Mirrors src/web/src/lib/util.ts PRIORITY_ORDER — kept in sync manually since
+// the server can't import from the web bundle. If you change the order there,
+// update it here too.
+const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
+function clampLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_LIMIT;
+  const n = Math.floor(limit);
+  if (n <= 0) return DEFAULT_LIMIT;
+  if (n > MAX_LIMIT) return MAX_LIMIT;
+  return n;
+}
+
+function getSortValue(t: Ticket, sortBy: TicketSortBy): string {
+  switch (sortBy) {
+    case 'title': return t.title;
+    case 'created': return new Date(t.createdAt).toISOString();
+    case 'priority': return String(PRIORITY_ORDER[t.priority || 'medium']);
+    case 'updated':
+    default: return new Date(t.updatedAt).toISOString();
+  }
+}
+
+function encodeCursor(t: Ticket, sortBy: TicketSortBy): string {
+  // Base64 keeps the payload opaque + URL-safe. The `|` separator inside
+  // survives fine because base64 doesn't produce it.
+  const raw = `${getSortValue(t, sortBy)}|${t.id}`;
+  return Buffer.from(raw, 'utf8').toString('base64url');
+}
+
+function decodeCursor(cursor: string): { sortValue: string; id: string } | null {
+  try {
+    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+    const sepIdx = raw.lastIndexOf('|');
+    if (sepIdx < 0) return null;
+    return { sortValue: raw.slice(0, sepIdx), id: raw.slice(sepIdx + 1) };
+  } catch {
+    return null;
+  }
+}
 
 export class ProjectStorage {
   private ticketsDir: string;
@@ -290,6 +360,108 @@ export class ProjectStorage {
   async getTicketsByType(type: TicketType): Promise<Ticket[]> {
     const tickets = await this.getAllTickets();
     return tickets.filter(t => t.type === type);
+  }
+
+  /**
+   * Server-side filter + sort + paginate for `GET /api/tickets`.
+   *
+   * Cursor pagination (not offset) so late inserts between page fetches don't
+   * shift rows — the cursor encodes the sort key of the last row from the
+   * previous page (`${sortValue}|${id}`) and we resume strictly *after* it.
+   *
+   * `total` is the *filtered* count so the "N shown" toolbar counter stays
+   * accurate against the same filter set the client just requested.
+   *
+   * Priority sort preserves the client tiebreak from `+page.svelte:197-208`:
+   * bug > task inside the same priority bucket.
+   */
+  async queryTickets(opts: TicketQueryOptions = {}): Promise<TicketQueryResult> {
+    const all = await this.getAllTickets();
+
+    // --- Filter --------------------------------------------------------------
+    const q = opts.q?.trim().toLowerCase() || '';
+    const filtered = all.filter(t => {
+      if (opts.sprint !== undefined) {
+        if (opts.sprint === 'none') {
+          if (t.sprint) return false;
+        } else if (t.sprint !== opts.sprint) {
+          return false;
+        }
+      }
+      if (opts.assignee !== undefined) {
+        if (opts.assignee === 'none') {
+          if (t.assignee) return false;
+        } else if (t.assignee !== opts.assignee) {
+          return false;
+        }
+      }
+      if (opts.type !== undefined && t.type !== opts.type) return false;
+      if (opts.status !== undefined && t.status !== opts.status) return false;
+      if (q) {
+        const hay = `${t.title} ${t.description || ''} ${t.id}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
+    // --- Sort ---------------------------------------------------------------
+    // The comparator must be total (no ties) so the cursor cleanly resumes.
+    // Tiebreak on `id` after the primary key.
+    const sortBy = opts.sortBy || 'updated';
+    const cmp = (a: Ticket, b: Ticket): number => {
+      let primary = 0;
+      switch (sortBy) {
+        case 'title':
+          primary = a.title.localeCompare(b.title);
+          break;
+        case 'created':
+          primary = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+          break;
+        case 'priority': {
+          const av = PRIORITY_ORDER[a.priority || 'medium'];
+          const bv = PRIORITY_ORDER[b.priority || 'medium'];
+          if (av !== bv) primary = av - bv;
+          else if (a.type === 'bug' && b.type === 'task') primary = -1;
+          else if (a.type === 'task' && b.type === 'bug') primary = 1;
+          else primary = 0;
+          break;
+        }
+        case 'updated':
+        default:
+          primary = new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+          break;
+      }
+      if (primary !== 0) return primary;
+      return a.id.localeCompare(b.id);
+    };
+    filtered.sort(cmp);
+
+    const total = filtered.length;
+
+    // --- Cursor slice -------------------------------------------------------
+    // Cursor is opaque to the client but shaped as `<sortValue>|<id>` under
+    // the covers. `sortValue` is whatever getSortValue returns for the
+    // currently active sortBy — an ISO date, a title, or a priority bucket.
+    let startIdx = 0;
+    if (opts.cursor) {
+      const decoded = decodeCursor(opts.cursor);
+      if (decoded) {
+        // Linear scan is fine at the scale we care about (< 10k tickets).
+        // Binary search would be a premature optimization while we're
+        // still on NDJSON-in-memory.
+        const idx = filtered.findIndex(t => t.id === decoded.id);
+        if (idx >= 0) startIdx = idx + 1;
+      }
+    }
+
+    const limit = clampLimit(opts.limit);
+    const page = filtered.slice(startIdx, startIdx + limit);
+    const nextIdx = startIdx + page.length;
+    const nextCursor = nextIdx < filtered.length
+      ? encodeCursor(page[page.length - 1], sortBy)
+      : null;
+
+    return { items: page, nextCursor, total };
   }
 
   // Comment CRUD (NDJSON)
