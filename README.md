@@ -493,6 +493,13 @@ Env vars honored by the discovery + spawn layer (see
   when set.
 - `TKXR_CLAUDE_MAX_BUDGET_USD` — forwarded as `--max-budget-usd <value>`
   when set.
+- `TKXR_CLAUDE_PERMISSION_MODE` — forwarded as `--permission-mode <value>`.
+  One of `default | acceptEdits | bypassPermissions`. Defaults to
+  `bypassPermissions` because the runner is headless — there is no human to
+  click "Approve" on tool-use prompts, so any other mode risks stalling the
+  run indefinitely. `plan` is refused (the CLI can't exit plan mode
+  non-interactively); if you set `TKXR_CLAUDE_ARGS="--permission-mode plan"`
+  the server strips it, logs a warning, and uses the configured mode.
 
 #### REST endpoints
 
@@ -519,11 +526,12 @@ POST /api/claude/cancel  body: { runId }
   "port": 8080,
   "url": "http://localhost:8080",
   "version": "2.0.2",
-  "claude": { "available": true, "bin": "claude", "version": "1.2.3" }
+  "claude": { "available": true, "bin": "claude", "version": "1.2.3", "permissionMode": "bypassPermissions" }
 }
 ```
 
 `disabled: true` is added when `TKXR_CLAUDE_DISABLED` is set.
+`permissionMode` reflects `TKXR_CLAUDE_PERMISSION_MODE` (default `bypassPermissions`).
 
 #### WebSocket events
 

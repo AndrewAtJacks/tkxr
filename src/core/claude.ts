@@ -26,6 +26,12 @@
 //                                  `--fallback-model <value>` when set.
 //   TKXR_CLAUDE_MAX_BUDGET_USD   — appended by tas-5j83ACCR as
 //                                  `--max-budget-usd <value>` when set.
+//   TKXR_CLAUDE_PERMISSION_MODE  — `default | acceptEdits | bypassPermissions`.
+//                                  Forwarded as `--permission-mode <value>`.
+//                                  Default `bypassPermissions` (this runner is
+//                                  headless — no human can approve prompts).
+//                                  `plan` is refused: `-p` mode has no exit
+//                                  hatch from plan mode so it would stall.
 
 import { promisify } from 'util';
 import { exec, spawn, type ChildProcessWithoutNullStreams } from 'child_process';
@@ -33,6 +39,16 @@ import { access } from 'fs/promises';
 import path from 'path';
 
 const execAsync = promisify(exec);
+
+/**
+ * Permission modes accepted by `claude --permission-mode`. `plan` is
+ * intentionally excluded: it would leave the headless CLI stalled awaiting a
+ * human to exit plan mode.
+ */
+export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
+
+const VALID_PERMISSION_MODES: readonly ClaudePermissionMode[] = ['default', 'acceptEdits', 'bypassPermissions'];
+export const DEFAULT_PERMISSION_MODE: ClaudePermissionMode = 'bypassPermissions';
 
 export interface ClaudeConfig {
   /** True only when the binary is discoverable AND `--version` succeeded. */
@@ -49,6 +65,61 @@ export interface ClaudeConfig {
   fallbackModel?: string;
   /** Optional --max-budget-usd value from TKXR_CLAUDE_MAX_BUDGET_USD. */
   maxBudgetUsd?: string;
+  /** Non-interactive permission mode passed via --permission-mode. */
+  permissionMode: ClaudePermissionMode;
+}
+
+/**
+ * Parse TKXR_CLAUDE_PERMISSION_MODE. Falls back to bypassPermissions on any
+ * invalid / unset value. `plan` triggers a warn + fallback (see spawnClaude
+ * for the argv-level scrub of `--permission-mode plan` from TKXR_CLAUDE_ARGS).
+ */
+export function parsePermissionMode(raw: string | undefined): ClaudePermissionMode {
+  if (!raw) return DEFAULT_PERMISSION_MODE;
+  const trimmed = raw.trim();
+  if (!trimmed) return DEFAULT_PERMISSION_MODE;
+  if (trimmed === 'plan') {
+    console.warn(
+      `TKXR_CLAUDE_PERMISSION_MODE=plan is refused (headless runner cannot exit plan mode). Falling back to ${DEFAULT_PERMISSION_MODE}.`,
+    );
+    return DEFAULT_PERMISSION_MODE;
+  }
+  if ((VALID_PERMISSION_MODES as readonly string[]).includes(trimmed)) {
+    return trimmed as ClaudePermissionMode;
+  }
+  console.warn(
+    `TKXR_CLAUDE_PERMISSION_MODE=${trimmed} is not one of ${VALID_PERMISSION_MODES.join(' | ')}. Falling back to ${DEFAULT_PERMISSION_MODE}.`,
+  );
+  return DEFAULT_PERMISSION_MODE;
+}
+
+/**
+ * Strip `--permission-mode plan` (in either `--permission-mode plan` or
+ * `--permission-mode=plan` form) from a user-supplied TKXR_CLAUDE_ARGS list.
+ * Returns the sanitized list — logs a warning when it drops something.
+ */
+export function stripPlanPermission(args: string[]): string[] {
+  const out: string[] = [];
+  let dropped = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--permission-mode' && args[i + 1] === 'plan') {
+      dropped = true;
+      i++;
+      continue;
+    }
+    if (a === '--permission-mode=plan') {
+      dropped = true;
+      continue;
+    }
+    out.push(a);
+  }
+  if (dropped) {
+    console.warn(
+      'TKXR_CLAUDE_ARGS contained --permission-mode plan; stripped (plan mode stalls the headless runner).',
+    );
+  }
+  return out;
 }
 
 /**
@@ -111,12 +182,14 @@ async function probeVersion(bin: string): Promise<{ available: boolean; bin: str
  * caller can trust the shape.
  */
 export async function discoverClaude(): Promise<ClaudeConfig> {
-  const extraArgs = parseExtraArgs(process.env.TKXR_CLAUDE_ARGS);
+  const rawExtraArgs = parseExtraArgs(process.env.TKXR_CLAUDE_ARGS);
+  const extraArgs = stripPlanPermission(rawExtraArgs);
   const fallbackModel = process.env.TKXR_CLAUDE_FALLBACK_MODEL?.trim() || undefined;
   const maxBudgetUsd = process.env.TKXR_CLAUDE_MAX_BUDGET_USD?.trim() || undefined;
+  const permissionMode = parsePermissionMode(process.env.TKXR_CLAUDE_PERMISSION_MODE);
 
   if (isDisabled()) {
-    return { available: false, bin: '', disabled: true, extraArgs, fallbackModel, maxBudgetUsd };
+    return { available: false, bin: '', disabled: true, extraArgs, fallbackModel, maxBudgetUsd, permissionMode };
   }
 
   const override = process.env.TKXR_CLAUDE_BIN?.trim();
@@ -125,6 +198,7 @@ export async function discoverClaude(): Promise<ClaudeConfig> {
     extraArgs,
     fallbackModel,
     maxBudgetUsd,
+    permissionMode,
   });
 
   // Absolute path override → try direct probe, no PATH lookup.
@@ -158,10 +232,23 @@ export async function discoverClaude(): Promise<ClaudeConfig> {
  * which binary + version to show in the tooltip. The spawner reads the full
  * struct off `app.locals.claude` directly.
  */
-export function toPublicConfig(c: ClaudeConfig): { available: boolean; bin: string; version?: string; disabled?: boolean } {
-  const out: { available: boolean; bin: string; version?: string; disabled?: boolean } = {
+export function toPublicConfig(c: ClaudeConfig): {
+  available: boolean;
+  bin: string;
+  version?: string;
+  disabled?: boolean;
+  permissionMode: ClaudePermissionMode;
+} {
+  const out: {
+    available: boolean;
+    bin: string;
+    version?: string;
+    disabled?: boolean;
+    permissionMode: ClaudePermissionMode;
+  } = {
     available: c.available,
     bin: c.bin,
+    permissionMode: c.permissionMode ?? DEFAULT_PERMISSION_MODE,
   };
   if (c.version) out.version = c.version;
   if (c.disabled) out.disabled = c.disabled;
@@ -180,6 +267,8 @@ export interface SpawnClaudeOptions {
   bin: string;
   /** Extra flags appended after `-p --output-format stream-json --verbose`. Space-split. */
   extraArgs?: string[];
+  /** Non-interactive permission mode. Defaults to bypassPermissions. `plan` is refused. */
+  permissionMode?: ClaudePermissionMode;
 }
 
 /**
@@ -211,12 +300,21 @@ export interface ClaudeRun {
  * narrow case; `.exe` (the normal install shape) still uses `shell: false`.
  */
 export function spawnClaude(opts: SpawnClaudeOptions): ChildProcessWithoutNullStreams {
-  const { prompt, cwd, bin, extraArgs = [] } = opts;
+  const { prompt, cwd, bin, permissionMode = DEFAULT_PERMISSION_MODE } = opts;
+  // Belt-and-suspenders: strip `--permission-mode plan` at spawn time too, in
+  // case a caller bypassed discovery's scrub.
+  const extraArgs = stripPlanPermission(opts.extraArgs ?? []);
 
   const baseArgs = ['-p', '--output-format', 'stream-json', '--verbose'];
   // Default to no session persistence — see docs §1d.
   if (!extraArgs.includes('--no-session-persistence')) {
     baseArgs.push('--no-session-persistence');
+  }
+  // Non-interactive permission mode. Without this the CLI stalls on the first
+  // tool call awaiting a human approval prompt (see bug-I30c9l0_). Let the
+  // user override via TKXR_CLAUDE_ARGS if they explicitly pass their own.
+  if (!extraArgs.some(a => a === '--permission-mode' || a.startsWith('--permission-mode='))) {
+    baseArgs.push('--permission-mode', permissionMode);
   }
   const fallbackModel = process.env.TKXR_CLAUDE_FALLBACK_MODEL?.trim();
   if (fallbackModel && !extraArgs.some(a => a === '--fallback-model')) {

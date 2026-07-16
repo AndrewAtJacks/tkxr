@@ -58,7 +58,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
   if (claudeConfig.disabled) {
     console.log(chalk.dim('claude CLI: disabled via TKXR_CLAUDE_DISABLED (clipboard fallback active)'));
   } else if (claudeConfig.available) {
-    console.log(chalk.dim(`claude CLI: ${claudeConfig.bin}${claudeConfig.version ? ` (v${claudeConfig.version})` : ''}`));
+    console.log(chalk.dim(`claude CLI: ${claudeConfig.bin}${claudeConfig.version ? ` (v${claudeConfig.version})` : ''} · permission-mode=${claudeConfig.permissionMode}`));
   } else {
     console.log(chalk.dim('claude CLI: not found on PATH (clipboard fallback active)'));
   }
@@ -1087,6 +1087,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
         // Use the pre-parsed extraArgs from discovery when present; the config
         // ticket already tokenized TKXR_CLAUDE_ARGS at boot.
         extraArgs: claude.extraArgs,
+        permissionMode: claude.permissionMode,
       });
     } catch (error: any) {
       // Binary went missing between discovery and now — flip availability and 503.

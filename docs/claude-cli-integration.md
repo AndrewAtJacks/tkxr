@@ -131,11 +131,16 @@ log without re-running.
 - `--no-session-persistence` — recommended default. Keeps the CLI's own
   session store from ballooning with every "Ask about ticket X" run.
   User can turn it off by setting `TKXR_CLAUDE_ARGS=""`.
-- `--dangerously-skip-permissions` — **do not add**. Even though every
-  prompt is user-authored (the panels build them, then the user clicks
-  Run), the CLI's permission prompts guarantee no runaway tool use on
-  first-time / novel tools. If users want autonomy they can pass it via
-  `TKXR_CLAUDE_ARGS`.
+- `--dangerously-skip-permissions` — **superseded** by `--permission-mode`
+  (see below). Historical note: this doc originally recommended leaving
+  permission prompts on. That failed in practice — the runner is fully
+  headless, so any approval gate stalls the run indefinitely. bug-I30c9l0_.
+- `--permission-mode <mode>` — **always passed.** Mode comes from
+  `TKXR_CLAUDE_PERMISSION_MODE` (`default | acceptEdits | bypassPermissions`).
+  Default `bypassPermissions`. `plan` is refused (the CLI has no
+  non-interactive escape from plan mode). Users who want a stricter mode
+  can downgrade via the env var; setting it in `TKXR_CLAUDE_ARGS` also
+  works and takes precedence over the built-in flag.
 - `--fallback-model` — expose as env `TKXR_CLAUDE_FALLBACK_MODEL`
   (only appended when set); avoids hard-coding a model name.
 - `--add-dir` — do **not** auto-add. The `cwd` we set already scopes tool

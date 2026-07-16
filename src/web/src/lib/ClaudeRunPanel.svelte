@@ -29,6 +29,11 @@
   // updates; kept small since we only tail the last ~500 rendered items.
   $: rendered = active ? renderChunks(active.chunks) : [];
 
+  // bug-I30c9l0_: headless runs stall silently when the CLI wants to prompt
+  // for tool approval. Detect that state from the stream and surface an
+  // explicit error banner so the user knows the run isn't just slow.
+  $: permissionBlocked = active ? detectPermissionBlock(active.chunks) : false;
+
   // Auto-scroll the transcript to the tail whenever new lines arrive, but
   // only if the user hasn't scrolled up manually.
   let transcriptEl: HTMLDivElement | null = null;
@@ -172,6 +177,29 @@
     return out.length > 500 ? out.slice(-500) : out;
   }
 
+  // Heuristic detector for "Claude wants to use a tool but permission-mode
+  // isn't set to bypassPermissions". The CLI emits either an explicit
+  // permission-request system frame, an ExitPlanMode tool_use, or a
+  // tool_result whose text contains a canonical "requires permission" /
+  // "requires approval" phrase. Any of those in a headless run means the
+  // user must set TKXR_CLAUDE_PERMISSION_MODE and restart.
+  const PERMISSION_HINT_RE = /requires (?:permission|approval|user approval|human approval)|permission denied by user|awaiting (?:user )?approval|please approve|plan mode/i;
+  function detectPermissionBlock(chunks: ClaudeChunk[]): boolean {
+    for (const chunk of chunks) {
+      const f = chunk.frame;
+      if (!f) continue;
+      if (typeof f.type === 'string' && /permission|approval/i.test(f.type)) return true;
+      if (f.type === 'system' && typeof f.subtype === 'string' && /permission|approval/i.test(f.subtype)) return true;
+      const contents = f.message?.content ?? [];
+      for (const c of contents) {
+        if (c.type === 'tool_use' && typeof c.name === 'string' && c.name === 'ExitPlanMode') return true;
+        if ((c.type === 'tool_result' || c.type === 'text') && typeof c.text === 'string' && PERMISSION_HINT_RE.test(c.text)) return true;
+      }
+      if (chunk.stream === 'stderr' && typeof f.text === 'string' && PERMISSION_HINT_RE.test(f.text)) return true;
+    }
+    return false;
+  }
+
   function summarizeInput(input: unknown): string {
     try {
       const s = JSON.stringify(input);
@@ -230,6 +258,13 @@
         <span class="meta-cwd" title={active.cwd}>{active.cwd}</span>
       {/if}
     </div>
+
+    {#if permissionBlocked}
+      <div class="perm-banner" role="alert">
+        <strong>Claude is asking for approval, but this runner is headless.</strong>
+        Set <code>TKXR_CLAUDE_PERMISSION_MODE=bypassPermissions</code> (the default) and restart the server, or cancel this run and retry.
+      </div>
+    {/if}
 
     <div
       class="transcript"
@@ -442,6 +477,23 @@
   }
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+
+  .perm-banner {
+    font-size: 12px;
+    line-height: 1.45;
+    color: #ffd7c2;
+    background: rgba(255, 107, 107, 0.12);
+    border: 1px solid rgba(255, 107, 107, 0.45);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .perm-banner strong { display: block; margin-bottom: 4px; color: #ff6b6b; }
+  .perm-banner code {
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: rgba(0,0,0,0.25);
+    padding: 1px 5px;
+    border-radius: 4px;
   }
 
   .summary {

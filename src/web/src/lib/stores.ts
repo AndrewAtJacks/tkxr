@@ -73,10 +73,14 @@ export const userStore = writable<User[]>([]);
 // `503 { code: 'claude_unavailable' }` on a run attempt, that helper will
 // also flip `available` to `false` locally so subsequent clicks skip the
 // round-trip.
+export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
+
 export interface ClaudeConfig {
   available: boolean;
   bin: string;
   version?: string;
   disabled?: boolean;
+  /** Non-interactive permission mode the runner passes to `claude --permission-mode`. */
+  permissionMode?: ClaudePermissionMode;
 }
 export const claudeConfig = writable<ClaudeConfig | null>(null);
