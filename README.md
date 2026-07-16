@@ -463,6 +463,28 @@ Override any of these with flags or env vars:
 pnpm dlx @legdev/tkxr serve --port 3000
 ```
 
+### Claude CLI integration
+
+`tkxr serve` probes for a working `claude` CLI once at boot (via `where` on
+Windows, `which` on macOS/Linux) and reports the result at `GET /api/config`
+under `claude: { available, bin, version }`. The web UI reads that store to
+decide between "Run in Claude" and the existing "Copy prompt" fallback — no
+config needed for the copy-paste path to keep working.
+
+Env vars honored by the discovery + spawn layer (see
+`docs/claude-cli-integration.md` for the full design):
+
+- `TKXR_CLAUDE_BIN` — absolute path or bare command name for the `claude`
+  executable. Default `claude`.
+- `TKXR_CLAUDE_ARGS` — extra flags forwarded to `claude -p` after the
+  built-in ones. Whitespace-split; no shell metacharacters are interpreted.
+- `TKXR_CLAUDE_DISABLED` — set to `1` / `true` / `yes` to force the
+  clipboard fallback even when the binary is present.
+- `TKXR_CLAUDE_FALLBACK_MODEL` — forwarded as `--fallback-model <value>`
+  when set.
+- `TKXR_CLAUDE_MAX_BUDGET_USD` — forwarded as `--max-budget-usd <value>`
+  when set.
+
 ---
 
 ## Development

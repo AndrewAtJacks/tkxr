@@ -18,6 +18,7 @@ import { createStorage } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
 import { SERVER_INSTRUCTIONS, TOOL_MAP, TOOLS, type ToolContext } from '../../mcp/tools.js';
 import { createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree } from '../../core/worktree.js';
+import { discoverClaude, toPublicConfig, type ClaudeConfig } from '../../core/claude.js';
 
 interface ServeArgs extends minimist.ParsedArgs {
   port?: number;
@@ -39,6 +40,20 @@ export async function startServer(args: ServeArgs): Promise<void> {
   const wss = new WebSocketServer({ server });
   
   const storage = await createStorage();
+
+  // Probe the user's `claude` CLI once at boot. Cached on `app.locals.claude`
+  // so `GET /api/config` and the downstream spawn handler (tas-5j83ACCR) both
+  // read from a single source of truth — no re-probing per request. See
+  // `docs/claude-cli-integration.md` §2 for env precedence.
+  const claudeConfig: ClaudeConfig = await discoverClaude();
+  app.locals.claude = claudeConfig;
+  if (claudeConfig.disabled) {
+    console.log(chalk.dim('claude CLI: disabled via TKXR_CLAUDE_DISABLED (clipboard fallback active)'));
+  } else if (claudeConfig.available) {
+    console.log(chalk.dim(`claude CLI: ${claudeConfig.bin}${claudeConfig.version ? ` (v${claudeConfig.version})` : ''}`));
+  } else {
+    console.log(chalk.dim('claude CLI: not found on PATH (clipboard fallback active)'));
+  }
 
   // Ensure the process is running from the appropriate `dist` directory so relative
   // paths to `package.json` and the `web` assets resolve correctly.
@@ -160,11 +175,16 @@ export async function startServer(args: ServeArgs): Promise<void> {
   // Serve server configuration for dynamic client discovery
   app.get('/api/config', async (req, res) => {
     try {
+      // `claude` block populated once at boot from `discoverClaude()` (§2 of
+      // docs/claude-cli-integration.md). Web store `claudeConfig` reads this
+      // to decide between "Run in Claude" and the existing "Copy prompt" flow.
+      const cached: ClaudeConfig = app.locals.claude ?? { available: false, bin: '' };
       res.json({
         host: 'localhost',
         port: port,
         url: `http://localhost:${port}`,
-        version: version
+        version: version,
+        claude: toPublicConfig(cached),
       });
     } catch (error) {
       res.status(500).json({ error: 'Failed to get server config' });

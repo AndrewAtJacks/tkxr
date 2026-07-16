@@ -2,7 +2,7 @@
   import { browser } from '$app/environment';
   import { onDestroy, onMount } from 'svelte';
   import type { Sprint, Ticket, User } from '../lib/stores';
-  import { sprintStore, ticketStore, userStore } from '../lib/stores';
+  import { sprintStore, ticketStore, userStore, claudeConfig } from '../lib/stores';
   import { normalizeTicket, PRIORITY_ORDER } from '../lib/util';
 
   import Sidebar from '../lib/Sidebar.svelte';
@@ -114,6 +114,11 @@
       if (cRes.ok) {
         const j = await cRes.json();
         if (j.version) version = `v${j.version}`;
+        // Populate the claude CLI capability store so downstream panels
+        // (tas-T8ZXseeD et al.) can branch between "Run in Claude" and
+        // `copyPrompt` (clipboard.ts) from first paint. Docs §5.
+        if (j.claude) claudeConfig.set(j.claude);
+        else claudeConfig.set({ available: false, bin: '' });
       }
       if (ccRes.ok) {
         commentCounts = await ccRes.json();
