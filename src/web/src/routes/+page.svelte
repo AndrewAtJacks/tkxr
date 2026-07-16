@@ -185,6 +185,18 @@
             refreshCommentCounts();
             return;
           }
+          // Paged-aware ticket handling (tas-98YN7GqK): let the paged store patch
+          // its own visible slice instead of dropping every loaded page with a
+          // bulk `reload()`. Sidebar/triage summary counts are handled by
+          // `Sidebar.svelte`'s own subscription to the shared `ticketEvents.ts`
+          // bus (with 500ms coalescing), so nothing to do for that here.
+          if (m.type === 'ticket_created' || m.type === 'ticket_updated' || m.type === 'ticket_deleted') {
+            pagedTickets.applyEvent(m);
+            return;
+          }
+          // Sprint/user events still trigger the bulk reference-data refresh
+          // (sprintStore, userStore) — cheap fetches, and the paged store's
+          // filter view depends on their current shape.
           reload();
         } catch { /* noop */ }
       };

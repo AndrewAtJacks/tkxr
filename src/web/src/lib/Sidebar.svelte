@@ -47,6 +47,21 @@
   let summary: TicketSummary | null = null;
   let summaryAbort: AbortController | null = null;
 
+  // Burst coalescing for `/api/tickets/summary` refetches (tas-98YN7GqK).
+  // Every `ticket_*` WS event nudges this timer; the actual fetch fires 500ms
+  // after the last nudge in the burst. Rapid mutation storms (bulk imports,
+  // reordering, board drags landing back-to-back) hit the summary endpoint
+  // once instead of once-per-event.
+  const SUMMARY_COALESCE_MS = 500;
+  let summaryTimer: number | null = null;
+  function scheduleSummaryRefetch() {
+    if (summaryTimer !== null) window.clearTimeout(summaryTimer);
+    summaryTimer = window.setTimeout(() => {
+      summaryTimer = null;
+      fetchSummary();
+    }, SUMMARY_COALESCE_MS);
+  }
+
   async function fetchSummary() {
     if (summaryAbort) summaryAbort.abort();
     const ac = new AbortController();
@@ -98,12 +113,16 @@
     // Sidebar is effectively always mounted, so this subscription is stable
     // for the lifetime of the app shell. That's fine — the shared bus is
     // idempotent and holds a single WebSocket regardless of subscriber count.
-    offTicketEvents = onTicketEvent(() => fetchSummary());
+    // Bursts of ticket_* events coalesce into one summary fetch (see
+    // `scheduleSummaryRefetch`) so board drags / bulk imports don't hammer
+    // `/api/tickets/summary`.
+    offTicketEvents = onTicketEvent(() => scheduleSummaryRefetch());
   });
   onDestroy(() => {
     window.removeEventListener('mousedown', onWindowClick);
     window.removeEventListener('keydown', onKey);
     if (offTicketEvents) offTicketEvents();
+    if (summaryTimer !== null) window.clearTimeout(summaryTimer);
     if (summaryAbort) summaryAbort.abort();
   });
 
