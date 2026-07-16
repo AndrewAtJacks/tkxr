@@ -1,9 +1,11 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { Sprint, Ticket, User } from './stores';
+  import { claudeConfig } from './stores';
   import { avatarColorFor, initials, sprintDotColor, STATUS_COLOR } from './util';
-  import { copyPrompt, copyToClipboard, showToast } from './clipboard';
+  import { copyToClipboard, showToast } from './clipboard';
   import { orchestrateSprintPrompt } from './prompts';
+  import { runPrompt } from './claudeRun';
   import X from './icons/X.svelte';
   import Plus from './icons/Plus.svelte';
   import Sparkles from './icons/Sparkles.svelte';
@@ -147,9 +149,12 @@
     showToast(ok ? 'Copied cd command' : 'Copy failed', ok ? 'success' : 'error');
   }
 
-  function copyOrchestrate() {
+  function runOrchestrate() {
     if (!sprint) return;
-    copyPrompt(orchestrateSprintPrompt(sprint, tickets, users));
+    runPrompt(orchestrateSprintPrompt(sprint, tickets, users), {
+      cwd: sprint.worktree?.path,
+      label: 'Orchestrate ' + sprint.name,
+    });
   }
 
   async function assignToSprint(t: Ticket) {
@@ -277,9 +282,9 @@
         <span>Orchestrate this sprint</span>
       </div>
       <div class="orch-hint">Copies a prompt that puts Claude Code in orchestrator mode — it fans out one sub-agent per open ticket, then merges each ticket branch into the sprint branch as they finish. {#if !sprint.worktree}Consider creating the sprint worktree first.{/if}</div>
-      <button class="orch-btn" on:click={copyOrchestrate}>
+      <button class="orch-btn" on:click={runOrchestrate}>
         <Sparkles size={14} color="#fff" />
-        <span>Orchestrate sprint</span>
+        <span>{$claudeConfig?.available ? 'Run in Claude' : 'Copy prompt'}</span>
       </button>
     </div>
   {/if}
