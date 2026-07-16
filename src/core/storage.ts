@@ -476,6 +476,11 @@ export class ProjectStorage {
       const newLines = lines.map(line => {
         const t = JSON.parse(line);
         if (t.id === id) {
+          // Legacy 'todo' rows still exist on disk; getAllTickets rewrites them
+          // to 'backlog' on read, but this write path bypasses that mapping —
+          // so an assign (no status in patch) used to round-trip 'todo' back out
+          // via broadcast, and the board dropped the ticket.
+          if (t.status === 'todo') t.status = 'backlog';
           const next: Ticket = { ...t, ...updates, updatedAt: new Date() };
           updatedTicket = next;
           return JSON.stringify(next);
