@@ -4,7 +4,7 @@
   import { claudeConfig } from './stores';
   import { avatarColorFor, initials, sprintDotColor, STATUS_COLOR } from './util';
   import { copyToClipboard, showToast } from './clipboard';
-  import { orchestrateSprintPrompt, sprintBreakdownPrompt } from './prompts';
+  import { commitSprintPrompt, orchestrateSprintPrompt, sprintBreakdownPrompt } from './prompts';
   import { runPrompt } from './claudeRun';
   import X from './icons/X.svelte';
   import Plus from './icons/Plus.svelte';
@@ -167,6 +167,14 @@
     });
   }
 
+  function commitWithClaude() {
+    if (!sprint) return;
+    runPrompt(commitSprintPrompt(sprint, tickets, users), {
+      cwd: sprint.worktree?.path,
+      label: 'Commit ' + sprint.name,
+    });
+  }
+
   async function assignToSprint(t: Ticket) {
     if (!sprint) return;
     try {
@@ -315,6 +323,21 @@
       <button class="orch-btn" on:click={runOrchestrate}>
         <Sparkles size={14} color="#fff" />
         <span>{$claudeConfig?.available ? 'Run in Claude' : 'Copy prompt'}</span>
+      </button>
+    </div>
+
+    <div class="orch-card">
+      <div class="orch-head">
+        <Sparkles size={14} color="var(--ai)" />
+        <span>Commit sprint work</span>
+      </div>
+      <div class="orch-hint">
+        Runs Claude in {sprint.worktree ? 'the sprint worktree' : 'the repo root'} to stage remaining changes and land Conventional Commits — <code>&lt;type&gt;(&lt;scope&gt;): … ({sprint.id})</code> for integration work, per-ticket ids for ticket-specific work, <code>chore(merge): …</code> for unmerged ticket branches.
+        {#if !sprint.worktree}<br /><em>No sprint worktree — Claude will ask before touching the main checkout.</em>{/if}
+      </div>
+      <button class="orch-btn" on:click={commitWithClaude} title={sprint.worktree ? `Commit in ${sprint.worktree.path}` : 'No sprint worktree — Claude will ask before touching main'}>
+        <Sparkles size={14} color="#fff" />
+        <span>{$claudeConfig?.available ? 'Commit with Claude' : 'Copy commit prompt'}</span>
       </button>
     </div>
   {/if}

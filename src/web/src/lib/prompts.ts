@@ -245,6 +245,83 @@ export function commitTicketPrompt(ticket: Ticket, users: User[], sprints: Sprin
   return withDirective(lines.join('\n'));
 }
 
+export function commitSprintPrompt(sprint: Sprint, tickets: Ticket[], users: User[]): string {
+  const scoped = tickets.filter(t => t.sprint === sprint.id);
+  const projection = scoped.map(t => {
+    const a = t.assignee ? users.find(u => u.id === t.assignee) : null;
+    const out: any = {
+      id: t.id,
+      type: t.type,
+      title: t.title,
+      status: t.status,
+      priority: t.priority || null,
+      estimate: t.estimate ?? null,
+      assignee: a ? `@${a.username}` : null,
+    };
+    if (t.worktree) out.worktree = { path: t.worktree.path, branch: t.worktree.branch };
+    return out;
+  });
+
+  const wtPath = sprint.worktree?.path;
+  const wtBranch = sprint.worktree?.branch;
+  const id = sprint.id;
+
+  const lines: string[] = [
+    `# tkxr — Commit sprint work for "${sprint.name}" (${id})`,
+    ``,
+    `Your job: land Conventional Commits on the sprint branch for any uncommitted or unmerged work associated with this sprint. No new implementation, no refactors — just commits.`,
+    ``,
+  ];
+
+  if (wtPath && wtBranch) {
+    lines.push(
+      `**Sprint worktree:** \`${wtPath}\` on branch \`${wtBranch}\`. \`cd\` there before running any git command — commits MUST land on this branch, not the parent checkout.`,
+      ``,
+    );
+  } else {
+    lines.push(
+      `**No sprint worktree recorded.** Before committing, ask the user which working tree to commit in — do NOT commit into the shared main checkout without confirmation.`,
+      ``,
+    );
+  }
+
+  lines.push(
+    `## Suggested flow`,
+    ``,
+    `1. \`cd\` into the sprint worktree${wtPath ? ` (\`${wtPath}\`)` : ''}.`,
+    `2. \`git status\` and \`git diff\` (plus \`git diff --staged\`) to inventory what actually changed. If there is nothing to commit AND no unmerged ticket branches remain, STOP: \`add_comment\` on any ticket in this sprint saying the sprint tree is clean and return control — don't create an empty commit.`,
+    `3. Decide the shape of the work:`,
+    `   - **Integration / cross-cutting changes not tied to a single ticket** → one commit with \`<type>(<scope>): <subject> (${id})\` — tag the sprint id so it's greppable.`,
+    `   - **Changes that clearly belong to one ticket in this sprint** → tag that ticket id instead of the sprint id.`,
+    `   - **Unmerged ticket branches in \`review\`** → merge each one into the sprint branch with \`git merge --no-ff <ticket-branch> -m "chore(merge): <ticket-id> <short title>"\`. On conflict: \`git merge --abort\`, \`add_comment\` on the ticket describing the conflict, and stop — do NOT force.`,
+    `4. Stage the correct files — prefer \`git add <path>...\` over \`git add -A\`. Skip unrelated cruft (editor swap files, .env, node_modules diff noise). Leave unrelated changes unstaged and mention it in the summary comment.`,
+    `5. Craft each commit message per the convention below. Subject imperative, ≤72 chars including \`<type>(<scope>): \` and the trailing \`(<id>)\` where \`<id>\` is either \`${id}\` or a ticket id from this sprint.`,
+    `6. Body (optional): one short paragraph explaining WHY, sourced from the sprint goal or ticket description — not a diff summary. Wrap at ~72 cols. No "Generated with…" trailer.`,
+    `7. Run \`git commit -m "<subject>" -m "<body>"\` per commit (use two \`-m\` flags so subject/body separate cleanly; use a single-quoted PowerShell here-string \`@'…'@\` on Windows if the body has special chars). Do NOT push, do NOT amend anything already on the branch.`,
+    `8. On success: \`add_comment\` on the most representative ticket in this sprint (or the first one if it's a pure integration commit) with the commit subject(s) + short hash(es) from \`git rev-parse --short HEAD\`. Do not change ticket statuses — the human decides review/done transitions.`,
+    `9. On any failure (hook rejects, pre-commit lint, etc.): do NOT bypass with \`--no-verify\`. Fix the underlying issue if trivial, otherwise \`add_comment\` on the sprint's first ticket naming the exact failure and stop.`,
+    ``,
+    CONVENTIONAL_COMMIT_GUIDE,
+    ``,
+    `## Sprint context`,
+    '```json',
+    JSON.stringify({
+      id: sprint.id,
+      name: sprint.name,
+      goal: sprint.goal || null,
+      status: sprint.status,
+      worktree: sprint.worktree ? { path: sprint.worktree.path, branch: sprint.worktree.branch } : null,
+      ticketCount: projection.length,
+      tickets: projection,
+    }, null, 2),
+    '```',
+    ``,
+    MCP_REMINDER,
+  );
+
+  return withDirective(lines.join('\n'));
+}
+
 export function ticketAskPrompt(question: string, ticket: Ticket, users: User[], sprints: Sprint[], allTickets: Ticket[] = []): string {
   const ctx = compactTicket(ticket, users, sprints, allTickets);
   return withDirective([
