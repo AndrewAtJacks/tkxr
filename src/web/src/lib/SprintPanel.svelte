@@ -1,16 +1,27 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import type { Sprint, Ticket, User } from './stores';
-  import { avatarColorFor, initials, sprintDotColor, STATUS_COLOR } from './util';
-  import { copyPrompt, copyToClipboard, showToast } from './clipboard';
-  import { orchestrateSprintPrompt } from './prompts';
+  import { claudeConfig } from './stores';
+  import { avatarColorFor, initials, normalizeTicket, sprintDotColor, STATUS_COLOR } from './util';
+  import { copyToClipboard, showToast } from './clipboard';
+  import { commitSprintPrompt, orchestrateSprintPrompt, sprintBreakdownPrompt } from './prompts';
+  import BranchInsights from './BranchInsights.svelte';
+  import { runPrompt } from './claudeRun';
+  import { onTicketEvent } from './ticketEvents';
   import X from './icons/X.svelte';
   import Plus from './icons/Plus.svelte';
   import Sparkles from './icons/Sparkles.svelte';
 
   export let sprint: Sprint | null = null;
   export let isCreate = false;
+  // Legacy prop retained so callers don't need to change simultaneously.
+  // Once the main ticketStore is paged (tas-RYc3-yIM), this may only contain
+  // the loaded page — so we no longer trust it. Sprint data comes from a
+  // dedicated `GET /api/tickets?sprint=<id>` fetch below (see tas-z-8q_Ljc).
   export let tickets: Ticket[] = [];
+  // Keep the prop referenced so svelte-check doesn't flag it as unused; the
+  // parent still binds it during the concurrent tas-RYc3-yIM refactor.
+  $: void tickets;
   export let users: User[] = [];
 
   const dispatch = createEventDispatcher();
@@ -26,13 +37,74 @@
       };
   let saveTimer: number | null = null;
 
+  // Dedicated slice of tickets for this sprint + a small unassigned-backlog
+  // pool for the "Add from backlog" section. Both are fetched once on mount
+  // and refetched on any `ticket_*` WebSocket event while the panel is open
+  // (subscription torn down on destroy — no ambient traffic).
+  let sprintTickets: Ticket[] = [];
+  let unassignedBacklog: Ticket[] = [];
+  let sprintTicketsAbort: AbortController | null = null;
+  let backlogAbort: AbortController | null = null;
+
   const SPRINT_LIFECYCLE: Sprint['status'][] = ['planning', 'active', 'completed'];
   $: draftStatus = (draft.status || 'planning') as Sprint['status'];
-  $: sprintTickets = sprint ? tickets.filter(t => t.sprint === sprint!.id) : [];
   $: totalPts = sprintTickets.reduce((s, t) => s + (t.estimate || 0), 0);
   $: donePts = sprintTickets.filter(t => t.status === 'done').reduce((s, t) => s + (t.estimate || 0), 0);
   $: pct = totalPts > 0 ? Math.round((donePts / totalPts) * 100) : 0;
-  $: unassignedBacklog = tickets.filter(t => t.status === 'backlog' && !t.sprint);
+
+  async function fetchSprintTickets() {
+    if (!sprint) return;
+    if (sprintTicketsAbort) sprintTicketsAbort.abort();
+    const ac = new AbortController();
+    sprintTicketsAbort = ac;
+    try {
+      const res = await fetch(`/api/tickets?sprint=${encodeURIComponent(sprint.id)}&limit=200`, { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      sprintTickets = items.map(normalizeTicket);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+      // noop — panel remains usable with stale data
+    } finally {
+      if (sprintTicketsAbort === ac) sprintTicketsAbort = null;
+    }
+  }
+
+  async function fetchUnassignedBacklog() {
+    // For the "Add from backlog" section we want backlog tickets that don't
+    // belong to any sprint. `sprint=none` selects the no-sprint bucket.
+    if (backlogAbort) backlogAbort.abort();
+    const ac = new AbortController();
+    backlogAbort = ac;
+    try {
+      const res = await fetch('/api/tickets?sprint=none&status=backlog&limit=200', { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      unassignedBacklog = items.map(normalizeTicket);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+    } finally {
+      if (backlogAbort === ac) backlogAbort = null;
+    }
+  }
+
+  async function refetchAll() {
+    await Promise.all([fetchSprintTickets(), fetchUnassignedBacklog()]);
+  }
+
+  onMount(() => {
+    if (!isCreate && sprint) refetchAll();
+    // Subscribe to ticket_* events for as long as this panel is mounted; the
+    // shared bus closes the socket automatically once we unsubscribe.
+    const off = onTicketEvent(() => { if (!isCreate && sprint) refetchAll(); });
+    return () => {
+      off();
+      if (sprintTicketsAbort) sprintTicketsAbort.abort();
+      if (backlogAbort) backlogAbort.abort();
+    };
+  });
 
   function schedulePatch(patch: any) {
     if (!sprint || isCreate) return;
@@ -147,9 +219,32 @@
     showToast(ok ? 'Copied cd command' : 'Copy failed', ok ? 'success' : 'error');
   }
 
-  function copyOrchestrate() {
+  function runOrchestrate() {
     if (!sprint) return;
-    copyPrompt(orchestrateSprintPrompt(sprint, tickets, users));
+    // `sprintTickets` is already scoped to this sprint; the prompt helper
+    // filters again but happily accepts a pre-scoped list.
+    runPrompt(orchestrateSprintPrompt(sprint, sprintTickets, users), {
+      cwd: sprint.worktree?.path,
+      label: 'Orchestrate ' + sprint.name,
+    });
+  }
+
+  $: canPlan = !!sprint && !!sprint.goal && sprint.goal.trim().length > 0 && sprint.status === 'planning';
+
+  function runPlan() {
+    if (!sprint || !canPlan) return;
+    runPrompt(sprintBreakdownPrompt(sprint, sprintTickets, users), {
+      cwd: sprint.worktree?.path,
+      label: 'Plan ' + sprint.name,
+    });
+  }
+
+  function commitWithClaude() {
+    if (!sprint) return;
+    runPrompt(commitSprintPrompt(sprint, tickets, users), {
+      cwd: sprint.worktree?.path,
+      label: 'Commit ' + sprint.name,
+    });
   }
 
   async function assignToSprint(t: Ticket) {
@@ -271,15 +366,54 @@
       {/if}
     </div>
 
+    {#if sprint.worktree}
+      <BranchInsights scope="sprint" id={sprint.id} worktreePath={sprint.worktree.path} />
+    {/if}
+
+    <div class="orch-card">
+      <div class="orch-head">
+        <Sparkles size={14} color="var(--ai)" />
+        <span>Plan sprint with Claude</span>
+      </div>
+      <div class="orch-hint">
+        {#if canPlan}
+          Sends a prompt that asks Claude to research the sprint goal, then create child tickets (with waves via <code>dependsOn</code>). Guardrails: won't touch existing tickets, won't flip statuses, capped at ~12 new tickets.
+        {:else if !sprint.goal || !sprint.goal.trim()}
+          Set a sprint <strong>goal</strong> above to enable planning.
+        {:else if sprint.status !== 'planning'}
+          Only available while the sprint is in <strong>planning</strong>.
+        {/if}
+      </div>
+      <button class="orch-btn" on:click={runPlan} disabled={!canPlan}>
+        <Sparkles size={14} color="#fff" />
+        <span>{$claudeConfig?.available ? 'Plan with Claude' : 'Copy plan prompt'}</span>
+      </button>
+    </div>
+
     <div class="orch-card">
       <div class="orch-head">
         <Sparkles size={14} color="var(--ai)" />
         <span>Orchestrate this sprint</span>
       </div>
       <div class="orch-hint">Copies a prompt that puts Claude Code in orchestrator mode — it fans out one sub-agent per open ticket, then merges each ticket branch into the sprint branch as they finish. {#if !sprint.worktree}Consider creating the sprint worktree first.{/if}</div>
-      <button class="orch-btn" on:click={copyOrchestrate}>
+      <button class="orch-btn" on:click={runOrchestrate}>
         <Sparkles size={14} color="#fff" />
-        <span>Orchestrate sprint</span>
+        <span>{$claudeConfig?.available ? 'Run in Claude' : 'Copy prompt'}</span>
+      </button>
+    </div>
+
+    <div class="orch-card">
+      <div class="orch-head">
+        <Sparkles size={14} color="var(--ai)" />
+        <span>Commit sprint work</span>
+      </div>
+      <div class="orch-hint">
+        Runs Claude in {sprint.worktree ? 'the sprint worktree' : 'the repo root'} to stage remaining changes and land Conventional Commits — <code>&lt;type&gt;(&lt;scope&gt;): … ({sprint.id})</code> for integration work, per-ticket ids for ticket-specific work, <code>chore(merge): …</code> for unmerged ticket branches.
+        {#if !sprint.worktree}<br /><em>No sprint worktree — Claude will ask before touching the main checkout.</em>{/if}
+      </div>
+      <button class="orch-btn" on:click={commitWithClaude} title={sprint.worktree ? `Commit in ${sprint.worktree.path}` : 'No sprint worktree — Claude will ask before touching main'}>
+        <Sparkles size={14} color="#fff" />
+        <span>{$claudeConfig?.available ? 'Commit with Claude' : 'Copy commit prompt'}</span>
       </button>
     </div>
   {/if}
@@ -492,7 +626,14 @@
     cursor: pointer;
     transition: opacity .12s;
   }
-  .orch-btn:hover { opacity: .9; }
+  .orch-btn:hover:not(:disabled) { opacity: .9; }
+  .orch-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .orch-hint code {
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-size: 10.5px;
+  }
 
   .burn {
     background: var(--elevated);

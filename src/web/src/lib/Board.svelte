@@ -1,59 +1,165 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { Sprint, Ticket, User } from './stores';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { derived } from 'svelte/store';
+  import type { PagedTicketQuery, PagedTicketStore, Sprint, Ticket, TicketStatus, User } from './stores';
+  import { createPagedTicketStore } from './stores';
   import { STATUS_COLOR, STATUS_LABEL, STATUS_ORDER, statusTint } from './util';
   import { draggingTicketId } from './drag';
+  import { onTicketEvent } from './ticketEvents';
   import BoardCard from './BoardCard.svelte';
   import Plus from './icons/Plus.svelte';
 
-  export let tickets: Ticket[] = [];
+  // Board owns one paged store per column (tas-MKYRoS6x). A single global
+  // paged fetch can't fill the Kanban evenly — page 1 might be all `progress`
+  // and leave `backlog` empty. Each column keeps its own `nextCursor` so
+  // "Load more" only extends that column.
   export let sprints: Sprint[] = [];
   export let users: User[] = [];
   export let commentCounts: Record<string, number> = {};
+  /**
+   * Filter/sort state from the toolbar/sidebar. `status` is injected per-column,
+   * `limit` is fixed at 25 per column here. When this changes we reset all five
+   * column stores in lockstep.
+   */
+  export let query: Omit<PagedTicketQuery, 'status' | 'limit'> = {};
+
+  const PAGE_SIZE = 25;
 
   const dispatch = createEventDispatcher();
 
   $: sprintById = new Map(sprints.map(s => [s.id, s]));
   $: userById = new Map(users.map((u, i) => [u.id, { user: u, index: i }]));
-  $: byStatus = STATUS_ORDER.reduce((acc, s) => {
-    acc[s] = tickets.filter(t => t.status === s);
-    return acc;
-  }, {} as Record<string, Ticket[]>);
 
-  let dragOverCol: string | null = null;
-  let quickAddCol: string | null = null;
+  // One store per column. Instantiated once at mount so subscriptions from
+  // the template stay stable across query changes.
+  const stores: Record<TicketStatus, PagedTicketStore> = {
+    backlog: createPagedTicketStore(),
+    progress: createPagedTicketStore(),
+    review: createPagedTicketStore(),
+    blocked: createPagedTicketStore(),
+    done: createPagedTicketStore(),
+  };
+
+  // Combine each column's readable fields into single top-level derived stores
+  // so the template can `$colItems` / `$colTotals` / etc. via record lookup.
+  // Svelte auto-subscription only works on top-level identifiers, not on
+  // `stores[status].items`.
+  const colItems = derived(
+    [stores.backlog.items, stores.progress.items, stores.review.items, stores.blocked.items, stores.done.items],
+    ([b, p, r, bl, d]) => ({ backlog: b, progress: p, review: r, blocked: bl, done: d } as Record<TicketStatus, Ticket[]>),
+  );
+  const colTotals = derived(
+    [stores.backlog.total, stores.progress.total, stores.review.total, stores.blocked.total, stores.done.total],
+    ([b, p, r, bl, d]) => ({ backlog: b, progress: p, review: r, blocked: bl, done: d } as Record<TicketStatus, number>),
+  );
+  const colCursors = derived(
+    [stores.backlog.nextCursor, stores.progress.nextCursor, stores.review.nextCursor, stores.blocked.nextCursor, stores.done.nextCursor],
+    ([b, p, r, bl, d]) => ({ backlog: b, progress: p, review: r, blocked: bl, done: d } as Record<TicketStatus, string | null>),
+  );
+  const colLoadings = derived(
+    [stores.backlog.loading, stores.progress.loading, stores.review.loading, stores.blocked.loading, stores.done.loading],
+    ([b, p, r, bl, d]) => ({ backlog: b, progress: p, review: r, blocked: bl, done: d } as Record<TicketStatus, boolean>),
+  );
+
+  // Track applied query so the reactive reset doesn't refire on same-value
+  // reassignments (e.g. parent reruns without change).
+  let lastQueryKey = '';
+
+  function queryKey(q: Omit<PagedTicketQuery, 'status' | 'limit'>): string {
+    return JSON.stringify({
+      q: q.q || '',
+      sprint: q.sprint || '',
+      assignee: q.assignee || '',
+      type: q.type || '',
+      sortBy: q.sortBy || '',
+    });
+  }
+
+  function resetAllColumns() {
+    for (const status of STATUS_ORDER) {
+      stores[status].resetAndFetch({ ...query, status, limit: PAGE_SIZE });
+    }
+  }
+
+  // Any filter/sort change refetches page 1 for all five columns.
+  $: {
+    const key = queryKey(query);
+    if (key !== lastQueryKey) {
+      lastQueryKey = key;
+      resetAllColumns();
+    }
+  }
+
+  // Refetch a single column's page 1 (e.g. after a drag-drop or quick-add
+  // moves a card into/out of it).
+  function refreshColumn(status: TicketStatus) {
+    stores[status].resetAndFetch({ ...query, status, limit: PAGE_SIZE });
+  }
+
+  // WS wiring: pipe ticket_* events into every column's store so cards move
+  // between columns (or new tickets appear) without a full board reload.
+  // `applyEvent` on the paged store already handles the created/updated/deleted
+  // cases correctly against each column's `status` filter.
+  let offTicketEvents: (() => void) | null = null;
+  onMount(() => {
+    offTicketEvents = onTicketEvent((evt) => {
+      if (evt.type === 'ticket_created' || evt.type === 'ticket_updated' || evt.type === 'ticket_deleted') {
+        for (const status of STATUS_ORDER) {
+          stores[status].applyEvent(evt as any);
+        }
+      }
+    });
+  });
+  onDestroy(() => {
+    if (offTicketEvents) offTicketEvents();
+  });
+
+  let dragOverCol: TicketStatus | null = null;
+  let quickAddCol: TicketStatus | null = null;
   let quickAddValue = '';
 
-  function onColDragOver(status: string) {
+  function onColDragOver(status: TicketStatus) {
     return (e: DragEvent) => { e.preventDefault(); dragOverCol = status; };
   }
   function onColDragLeave() { dragOverCol = null; }
-  function onColDrop(status: string) {
+  function onColDrop(status: TicketStatus) {
     return async (e: DragEvent) => {
       e.preventDefault();
       dragOverCol = null;
       const tid = $draggingTicketId;
       draggingTicketId.set(null);
       if (!tid) return;
-      const t = tickets.find(x => x.id === tid);
-      if (!t || t.status === status) return;
+      // Find source column + ticket by walking each column's current items.
+      let sourceStatus: TicketStatus | null = null;
+      for (const s of STATUS_ORDER) {
+        if (stores[s].snapshot().some(t => t.id === tid)) { sourceStatus = s; break; }
+      }
+      if (!sourceStatus || sourceStatus === status) return;
       try {
         const res = await fetch(`/api/tickets/${tid}/status`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status }),
         });
-        if (res.ok) dispatch('reload');
+        if (res.ok) {
+          // Refetch both affected columns' first page. WS `ticket_updated` will
+          // also fire and `applyEvent` will remove/insert, but an explicit
+          // refetch also restores the correct `total` for the destination
+          // column (WS applyEvent intentionally doesn't bump total on inserts
+          // that would double-count).
+          refreshColumn(sourceStatus);
+          refreshColumn(status);
+        }
       } catch { /* noop */ }
     };
   }
 
-  function startQuickAdd(status: string) {
+  function startQuickAdd(status: TicketStatus) {
     quickAddCol = status;
     quickAddValue = '';
     setTimeout(() => document.getElementById(`quick-${status}`)?.focus(), 0);
   }
-  async function commitQuickAdd(status: string) {
+  async function commitQuickAdd(status: TicketStatus) {
     const title = quickAddValue.trim();
     if (!title) { quickAddCol = null; return; }
     try {
@@ -72,21 +178,35 @@
             body: JSON.stringify({ status }),
           });
         }
+        // Refresh the destination column so the new card appears at the top
+        // even before the WS event arrives. Also refetch backlog when the
+        // server-side default transitioned through it.
+        refreshColumn(status);
+        if (status !== 'backlog') refreshColumn('backlog');
+        // Let parent refresh sidebar/comment counts etc.
         dispatch('reload');
       }
     } catch { /* noop */ }
     quickAddCol = null;
     quickAddValue = '';
   }
-  function handleQuickKey(status: string, e: KeyboardEvent) {
+  function handleQuickKey(status: TicketStatus, e: KeyboardEvent) {
     if (e.key === 'Enter') { e.preventDefault(); commitQuickAdd(status); }
     else if (e.key === 'Escape') { e.preventDefault(); quickAddCol = null; quickAddValue = ''; }
+  }
+
+  function loadMore(status: TicketStatus) {
+    stores[status].fetchNextPage();
   }
 </script>
 
 <div class="board">
   {#each STATUS_ORDER as status}
     {@const color = STATUS_COLOR[status]}
+    {@const list = $colItems[status]}
+    {@const total = $colTotals[status]}
+    {@const cursor = $colCursors[status]}
+    {@const loading = $colLoadings[status]}
     <div
       class="col"
       style="background:{statusTint(status)};border-color:{dragOverCol === status ? 'var(--accent)' : 'var(--border-faint)'}"
@@ -99,7 +219,7 @@
       <div class="col-head">
         <span class="dot" style="background:{color}"></span>
         <span class="col-title" style="color:{color}">{STATUS_LABEL[status]}</span>
-        <span class="mono count">{byStatus[status].length}</span>
+        <span class="mono count">{total}</span>
         <span class="spacer"></span>
         <button class="add-btn" title="Add ticket" on:click={() => startQuickAdd(status)}>
           <Plus size={12} />
@@ -118,7 +238,7 @@
       {/if}
 
       <div class="cards">
-        {#each byStatus[status] as t (t.id)}
+        {#each list as t (t.id)}
           {@const sprint = t.sprint ? sprintById.get(t.sprint) : undefined}
           {@const asg = t.assignee ? userById.get(t.assignee) : undefined}
           <BoardCard
@@ -130,8 +250,17 @@
             on:open={() => dispatch('open', t.id)}
           />
         {/each}
-        {#if byStatus[status].length === 0 && quickAddCol !== status}
+        {#if list.length === 0 && quickAddCol !== status && !loading}
           <button class="empty" on:click={() => startQuickAdd(status)}>+ Add ticket</button>
+        {/if}
+        {#if cursor !== null}
+          <button
+            class="load-more"
+            disabled={loading}
+            on:click={() => loadMore(status)}
+          >
+            {loading ? 'Loading…' : `Load more (${total - list.length} left)`}
+          </button>
         {/if}
       </div>
     </div>
@@ -215,4 +344,23 @@
     text-align: center;
   }
   .empty:hover { border-color: var(--border-strong); color: var(--muted); }
+  .load-more {
+    background: var(--surface);
+    border: 1px solid var(--border-faint);
+    border-radius: 8px;
+    color: var(--muted);
+    padding: 8px 10px;
+    font-size: 11.5px;
+    cursor: pointer;
+    text-align: center;
+    margin-top: 2px;
+  }
+  .load-more:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+  .load-more:disabled {
+    cursor: default;
+    color: var(--faint);
+  }
 </style>

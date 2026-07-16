@@ -1,17 +1,24 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from 'svelte';
-  import type { Sprint, Ticket, TicketComment, User } from './stores';
-  import { avatarColorFor, initials, PRIORITY_META, relativeTime, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
-  import { copyPrompt, copyToClipboard, showToast } from './clipboard';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { claudeConfig, type Sprint, type Ticket, type TicketComment, type User } from './stores';
+  import { avatarColorFor, initials, normalizeTicket, PRIORITY_META, relativeTime, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
+  import { copyToClipboard, showToast } from './clipboard';
+  import { runPrompt } from './claudeRun';
   import { currentUserId } from './currentUser';
-  import { ticketAskPrompt, workOnTicketPrompt } from './prompts';
+  import { commitTicketPrompt, ticketAskPrompt, workOnTicketPrompt } from './prompts';
   import X from './icons/X.svelte';
   import Sparkles from './icons/Sparkles.svelte';
+  import BranchInsights from './BranchInsights.svelte';
 
   export let ticket: Ticket | null = null;
   export let isCreate = false;
   export let sprints: Sprint[] = [];
   export let users: User[] = [];
+  // Retained for backwards compat. Once the main store is paged this may only
+  // contain the currently-loaded page, which is fine for the display fallback
+  // below (chip title + status lookup). Dependency *suggestions* now come from
+  // a server-side search so users can link tickets outside the loaded page —
+  // see tas-z-8q_Ljc.
   export let allTickets: Ticket[] = [];
   export let defaultSprint: string | null = null;
   export let defaultAssignee: string | null = null;
@@ -46,14 +53,61 @@
 
   $: labelList = (draft.labels || []) as string[];
   $: depList = (draft.dependsOn || []) as string[];
-  $: depSuggestions = (() => {
-    const q = depInput.trim().toLowerCase();
-    if (!q || !allTickets.length) return [];
-    return allTickets
-      .filter(t => t.id !== ticket?.id && !depList.includes(t.id))
-      .filter(t => t.id.toLowerCase().includes(q) || t.title.toLowerCase().includes(q))
-      .slice(0, 6);
-  })();
+
+  // Dependency picker suggestions are fetched from the server so users can
+  // link tickets outside the currently-loaded page of the main store (see
+  // tas-z-8q_Ljc). Debounced + in-flight-cancelled per keystroke, with a
+  // monotonic sequence to protect against out-of-order responses.
+  let depSuggestions: Ticket[] = [];
+  const DEP_SEARCH_DEBOUNCE_MS = 150;
+  const DEP_SEARCH_LIMIT = 8;
+  let depSearchTimer: number | null = null;
+  let depSearchAbort: AbortController | null = null;
+  let depSearchSeq = 0;
+
+  $: scheduleDepSearch(depInput);
+
+  function scheduleDepSearch(q: string) {
+    if (depSearchTimer !== null) { clearTimeout(depSearchTimer); depSearchTimer = null; }
+    if (depSearchAbort) { depSearchAbort.abort(); depSearchAbort = null; }
+    const trimmed = q.trim();
+    if (!trimmed) {
+      depSuggestions = [];
+      return;
+    }
+    depSearchTimer = window.setTimeout(() => runDepSearch(trimmed), DEP_SEARCH_DEBOUNCE_MS);
+  }
+
+  async function runDepSearch(q: string) {
+    const seq = ++depSearchSeq;
+    const ac = new AbortController();
+    depSearchAbort = ac;
+    try {
+      const url = `/api/tickets?q=${encodeURIComponent(q)}&limit=${DEP_SEARCH_LIMIT}`;
+      const res = await fetch(url, { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      if (seq !== depSearchSeq) return;
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      const normalized: Ticket[] = items.map(normalizeTicket);
+      depSuggestions = normalized
+        .filter(t => t.id !== ticket?.id && !depList.includes(t.id))
+        .slice(0, 6);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+    } finally {
+      if (seq === depSearchSeq) depSearchAbort = null;
+    }
+  }
+
+  onDestroy(() => {
+    if (depSearchTimer !== null) clearTimeout(depSearchTimer);
+    if (depSearchAbort) depSearchAbort.abort();
+  });
+
+  // `allTickets` may be a stale/partial page, but it's still the best local
+  // source for rendering the *chip* label (status pill next to each existing
+  // dep). Missing entries show as `missing` — same as before this change.
   $: depTicketMap = new Map(allTickets.map(t => [t.id, t]));
 
   function addDep(id: string) {
@@ -117,7 +171,7 @@
   function copyAsk(prompt: string) {
     if (!ticket) return;
     const text = ticketAskPrompt(prompt, ticket, users, sprints, allTickets);
-    copyPrompt(text);
+    runPrompt(text, { cwd: ticket.worktree?.path, label: 'Ask about ' + ticket.id });
   }
   function copyAskFromInput() {
     const text = askInput.trim();
@@ -127,7 +181,17 @@
   }
   function copyWorkOn() {
     if (!ticket) return;
-    copyPrompt(workOnTicketPrompt(ticket, users, sprints, allTickets));
+    runPrompt(workOnTicketPrompt(ticket, users, sprints, allTickets), {
+      cwd: ticket.worktree?.path,
+      label: 'Work on ' + ticket.id,
+    });
+  }
+  function commitWithClaude() {
+    if (!ticket) return;
+    runPrompt(commitTicketPrompt(ticket, users, sprints, allTickets), {
+      cwd: ticket.worktree?.path,
+      label: 'Commit ' + ticket.id,
+    });
   }
 
   let worktreeBusy = false;
@@ -303,7 +367,7 @@
     return idx >= 0 ? { user: users[idx], index: idx } : null;
   }
 
-  $: prio = draft.priority ? PRIORITY_META[draft.priority as any] : null;
+  $: prio = draft.priority ? PRIORITY_META[draft.priority] : null;
 
   // Auto-grow textarea up to a cap (defaults to 60vh). Runs on mount and every input.
   // Once the content exceeds the cap, native scrolling kicks in via overflow-y: auto in CSS.
@@ -546,17 +610,37 @@
       {/if}
     </div>
 
+    {#if ticket.worktree}
+      <BranchInsights scope="ticket" id={ticket.id} worktreePath={ticket.worktree.path} />
+    {/if}
+
     <div class="ai-card">
       <div class="ai-head">
         <Sparkles size={14} color="var(--ai)" />
         <span>Hand this ticket to an agent</span>
       </div>
-      <div class="ai-hint">Copies a prompt (ticket JSON + tkxr MCP reminder) to your clipboard. Paste into Claude Code.</div>
+      <div class="ai-hint">
+        {#if $claudeConfig?.available}
+          Runs the prompt (ticket JSON + tkxr MCP reminder) in the local Claude CLI. Output streams into the run panel.
+        {:else}
+          Copies a prompt (ticket JSON + tkxr MCP reminder) to your clipboard. Paste into Claude Code.
+        {/if}
+      </div>
 
       <button class="work-btn" on:click={copyWorkOn}>
         <Sparkles size={14} color="#fff" />
         <span>Work on this</span>
       </button>
+
+      {#if ticket.status === 'review'}
+        <button class="commit-btn" on:click={commitWithClaude} title={ticket.worktree ? `Commit in ${ticket.worktree.path}` : 'No worktree recorded — Claude will ask before touching main'}>
+          <Sparkles size={14} color="#fff" />
+          <span>Commit with Claude</span>
+        </button>
+        <div class="ai-hint">
+          Runs Claude in {ticket.worktree ? 'the ticket worktree' : 'the repo root'} to craft a Conventional Commit (<code>&lt;type&gt;(&lt;scope&gt;): … ({ticket.id})</code>) from the current diff.
+        </div>
+      {/if}
 
       <div class="ai-hint" style="margin-top:2px">Or a narrower question:</div>
       <div class="ai-chips">
@@ -567,11 +651,11 @@
       <div class="ai-input">
         <input
           class="input"
-          placeholder="Custom question — copies as a prompt…"
+          placeholder={$claudeConfig?.available ? 'Custom question — runs in Claude…' : 'Custom question — copies as a prompt…'}
           bind:value={askInput}
           on:keydown={(e) => e.key === 'Enter' && copyAskFromInput()}
         />
-        <button class="btn" on:click={copyAskFromInput} disabled={!askInput.trim()}>Copy prompt</button>
+        <button class="btn" on:click={copyAskFromInput} disabled={!askInput.trim()}>{$claudeConfig?.available ? 'Run in Claude' : 'Copy prompt'}</button>
       </div>
     </div>
 
@@ -915,6 +999,29 @@
     transition: opacity .12s;
   }
   .work-btn:hover { opacity: .9; }
+  .commit-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 9px 12px;
+    background: linear-gradient(135deg, #46c17f, #2f8f5b);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .12s;
+  }
+  .commit-btn:hover { opacity: .9; }
+  .ai-hint code {
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-size: 10.5px;
+    font-family: 'IBM Plex Mono';
+  }
   .ai-chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .ai-chip {
     padding: 4px 8px;

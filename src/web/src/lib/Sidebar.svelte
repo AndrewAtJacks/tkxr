@@ -5,6 +5,7 @@
   import { theme } from './theme';
   import { currentUserId, resolveCurrentUser } from './currentUser';
   import { draggingTicketId } from './drag';
+  import { onTicketEvent } from './ticketEvents';
   import Search from './icons/Search.svelte';
   import Sparkles from './icons/Sparkles.svelte';
   import Columns from './icons/Columns.svelte';
@@ -21,6 +22,10 @@
   export let sprints: Sprint[] = [];
   export let users: User[] = [];
   export let tickets: Ticket[] = [];
+  // Legacy prop from `+page.svelte`. Kept for backwards compat but no longer
+  // authoritative — Sidebar now reads `/api/tickets/summary` on mount and on
+  // ticket_* WS events (tas-z-8q_Ljc). Parent may pass this in during the
+  // brief window before summary loads; after that our fetched value wins.
   export let triageCount = 0;
   export let panel: string | null = null;
 
@@ -30,6 +35,59 @@
   let showCompleted = false;
   let pickerOpen = false;
   let footerEl: HTMLDivElement | null = null;
+
+  // Server-computed aggregates. Populated on mount and refreshed on any
+  // ticket_* WS event (see tas-z-8q_Ljc / tas-4MNJ9qP5). Falls back to the
+  // legacy `triageCount` prop + `tickets.length` until the first fetch lands.
+  interface TicketSummary {
+    counts: { total: number; backlog: number; progress: number; review: number; blocked: number; done: number };
+    triage: { unassignedOpen: number; criticalOpen: number; backlogCount: number };
+    byStatus: { backlog: number; progress: number; review: number; blocked: number; done: number };
+  }
+  let summary: TicketSummary | null = null;
+  let summaryAbort: AbortController | null = null;
+
+  // Burst coalescing for `/api/tickets/summary` refetches (tas-98YN7GqK).
+  // Every `ticket_*` WS event nudges this timer; the actual fetch fires 500ms
+  // after the last nudge in the burst. Rapid mutation storms (bulk imports,
+  // reordering, board drags landing back-to-back) hit the summary endpoint
+  // once instead of once-per-event.
+  const SUMMARY_COALESCE_MS = 500;
+  let summaryTimer: number | null = null;
+  function scheduleSummaryRefetch() {
+    if (summaryTimer !== null) window.clearTimeout(summaryTimer);
+    summaryTimer = window.setTimeout(() => {
+      summaryTimer = null;
+      fetchSummary();
+    }, SUMMARY_COALESCE_MS);
+  }
+
+  async function fetchSummary() {
+    if (summaryAbort) summaryAbort.abort();
+    const ac = new AbortController();
+    summaryAbort = ac;
+    try {
+      const res = await fetch('/api/tickets/summary', { signal: ac.signal });
+      if (!res.ok) return;
+      summary = await res.json();
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+    } finally {
+      if (summaryAbort === ac) summaryAbort = null;
+    }
+  }
+
+  // Recompute triage count the same way `+page.svelte` did (unassigned open,
+  // any critical open, backlog >= 4 each contribute 1). Reading straight from
+  // summary keeps this correct even when only a slice of tickets is loaded
+  // client-side.
+  $: computedTriage = summary
+    ? (
+        (summary.triage.unassignedOpen > 0 ? 1 : 0)
+        + (summary.triage.criticalOpen > 0 ? 1 : 0)
+        + (summary.triage.backlogCount >= 4 ? 1 : 0)
+      )
+    : triageCount;
 
   $: me = resolveCurrentUser(users, $currentUserId);
   $: meIndex = me ? users.findIndex(u => u.id === me!.id) : -1;
@@ -47,16 +105,30 @@
   function onKey(e: KeyboardEvent) {
     if (e.key === 'Escape' && pickerOpen) pickerOpen = false;
   }
+  let offTicketEvents: (() => void) | null = null;
   onMount(() => {
     window.addEventListener('mousedown', onWindowClick);
     window.addEventListener('keydown', onKey);
+    fetchSummary();
+    // Sidebar is effectively always mounted, so this subscription is stable
+    // for the lifetime of the app shell. That's fine — the shared bus is
+    // idempotent and holds a single WebSocket regardless of subscriber count.
+    // Bursts of ticket_* events coalesce into one summary fetch (see
+    // `scheduleSummaryRefetch`) so board drags / bulk imports don't hammer
+    // `/api/tickets/summary`.
+    offTicketEvents = onTicketEvent(() => scheduleSummaryRefetch());
   });
   onDestroy(() => {
     window.removeEventListener('mousedown', onWindowClick);
     window.removeEventListener('keydown', onKey);
+    if (offTicketEvents) offTicketEvents();
+    if (summaryTimer !== null) window.clearTimeout(summaryTimer);
+    if (summaryAbort) summaryAbort.abort();
   });
 
-  $: totalCount = tickets.length;
+  // Prefer server total when available so the "All tickets" badge is correct
+  // even after the main ticket store transitions to paged loading.
+  $: totalCount = summary ? summary.counts.total : tickets.length;
   $: sprintCounts = new Map(sprints.map(s => [s.id, tickets.filter(t => t.sprint === s.id).length]));
   $: userCounts = new Map(users.map(u => [u.id, tickets.filter(t => t.assignee === u.id).length]));
   $: activeSprints = sprints.filter(s => s.status !== 'completed');
@@ -148,8 +220,8 @@
     <button style={navStyle(panel === 'triage')} on:click={openTriage}>
       <Sparkles size={15} />
       <span>AI Triage</span>
-      {#if triageCount > 0}
-        <span class="triage-pill">{triageCount}</span>
+      {#if computedTriage > 0}
+        <span class="triage-pill">{computedTriage}</span>
       {/if}
     </button>
   </nav>

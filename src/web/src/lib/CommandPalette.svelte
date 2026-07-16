@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, tick } from 'svelte';
+  import { createEventDispatcher, tick, onDestroy } from 'svelte';
   import type { Ticket, User } from './stores';
   import Sparkles from './icons/Sparkles.svelte';
   import Columns from './icons/Columns.svelte';
@@ -7,13 +7,34 @@
   import Plus from './icons/Plus.svelte';
 
   export let open = false;
+  // `tickets` is retained for backwards-compat callers but no longer drives
+  // the search results. Ticket lookups now hit `GET /api/tickets?q=&limit=20`
+  // so the palette can find tickets outside the currently-loaded page once
+  // the main store is paged (see tas-z-8q_Ljc / spr-6LhpAQQE).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   export let tickets: Ticket[] = [];
+  // Reference it once so svelte-check doesn't flag the unused prop; parents
+  // still bind it during the concurrent tas-RYc3-yIM ticketStore refactor.
+  $: void tickets;
   export let users: User[] = [];
 
   const dispatch = createEventDispatcher();
 
   let query = '';
   let inputEl: HTMLInputElement;
+  let matchedTickets: Ticket[] = [];
+  let searching = false;
+
+  // Debounce + in-flight cancellation. Each keystroke schedules a fetch 150ms
+  // out; if a new keystroke lands before the timer fires, we reset both the
+  // timer and the AbortController so only one request is in flight at a time.
+  const SEARCH_DEBOUNCE_MS = 150;
+  const SEARCH_LIMIT = 20;
+  let searchTimer: number | null = null;
+  let searchAbort: AbortController | null = null;
+  // Monotonic counter guards against out-of-order resolution: a slow request
+  // for "foo" must not overwrite results from a newer request for "foobar".
+  let searchSeq = 0;
 
   $: if (open) tick().then(() => inputEl?.focus());
   $: parsed = parseNL(query, users);
@@ -25,12 +46,54 @@
     { id: 'triage', label: 'Open AI Triage', hint: '', icon: Sparkles, kind: 'triage', payload: null },
   ];
 
-  $: matchedTickets = query.trim()
-    ? tickets.filter(t => {
-        const q = query.toLowerCase();
-        return t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q);
-      }).slice(0, 6)
-    : [];
+  // Re-run search whenever the query changes. Empty query clears results
+  // immediately (no need to round-trip for an empty state).
+  $: scheduleSearch(query);
+
+  function scheduleSearch(q: string) {
+    if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
+    if (searchAbort) { searchAbort.abort(); searchAbort = null; }
+    const trimmed = q.trim();
+    if (!trimmed) {
+      matchedTickets = [];
+      searching = false;
+      return;
+    }
+    searching = true;
+    searchTimer = window.setTimeout(() => runSearch(trimmed), SEARCH_DEBOUNCE_MS);
+  }
+
+  async function runSearch(q: string) {
+    const seq = ++searchSeq;
+    const ac = new AbortController();
+    searchAbort = ac;
+    try {
+      const url = `/api/tickets?q=${encodeURIComponent(q)}&limit=${SEARCH_LIMIT}`;
+      const res = await fetch(url, { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      // Ignore stale responses so a late-arriving reply for an older query
+      // doesn't clobber the current one.
+      if (seq !== searchSeq) return;
+      // /api/tickets returns `{ items, nextCursor, total }` when any query param
+      // is present; guard defensively in case that ever changes.
+      matchedTickets = Array.isArray(j) ? j : (j.items || []);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+      // Silent failure — palette stays usable via quick actions + NL create.
+    } finally {
+      if (seq === searchSeq) {
+        searching = false;
+        searchAbort = null;
+      }
+    }
+  }
+
+  onDestroy(() => {
+    if (searchTimer !== null) clearTimeout(searchTimer);
+    if (searchAbort) searchAbort.abort();
+  });
+
   $: matchedActions = query.trim()
     ? quickActions.filter(a => a.label.toLowerCase().includes(query.toLowerCase()))
     : quickActions;
@@ -164,6 +227,12 @@
             <span class="kbd mono">{t.id}</span>
           </button>
         {/each}
+      {:else if query.trim() && searching}
+        <div class="section-label">Tickets</div>
+        <div class="row hint">Searching…</div>
+      {:else if query.trim() && !searching && !parsed}
+        <div class="section-label">Tickets</div>
+        <div class="row hint">No matches.</div>
       {/if}
     </div>
   </div>
@@ -240,6 +309,8 @@
     width: 100%;
   }
   .row:hover { background: var(--surface-hover); }
+  .row.hint { color: var(--faint); cursor: default; font-size: 11.5px; padding-left: 12px; }
+  .row.hint:hover { background: transparent; }
   .row-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row.nl {
     background: rgba(76,141,255,.08);

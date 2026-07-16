@@ -1,5 +1,63 @@
 # Changelog
 
+## [2.1.0] - 2026-07-16
+
+### Added
+- **Server-paged tickets.** `GET /api/tickets` returns a
+  `{ items, nextCursor, total }` envelope when any of
+  `limit | cursor | q | sprint | assignee | type | status | sortBy` is
+  present, so a large repo no longer ships its full ticket store to the
+  browser on every load. Default `limit` is 50, hard cap 200; cursors are
+  opaque base64url of `sortValue|id`. Requests without any paging params
+  still return the legacy `Ticket[]` shape, so the CLI `list` command
+  and any external scripts that hard-code the pre-paging response keep
+  working unchanged.
+- **`GET /api/tickets/summary`.** Aggregate counts for sidebar badges,
+  triage pill, and Board column badges — returns
+  `{ counts: { backlog, progress, review, blocked, done, total }, triage: { unassignedOpen, criticalOpen, backlogCount }, byStatus }`.
+  Cheap single-pass over `getAllTickets()`; sidebar coalesces bursts of
+  `ticket_*` events into one refetch 500ms after the last one.
+- **Infinite scroll (List view).** `IntersectionObserver` on a sentinel
+  row inside `.list` fires `pagedTickets.fetchNextPage()` when within one
+  viewport (`rootMargin: 400px`) of visibility. Guards against parallel
+  in-flight page loads and de-dupes items by id, so rapid scroll +
+  WebSocket `ticket_created` racing a page fetch cannot double-render a
+  row.
+- **Per-column "Load more" (Board view).** Each of the five status
+  columns owns its own `createPagedTicketStore()` with a fixed `limit: 25`
+  and a "Load more (N left)" button that extends only that column. Column
+  badges show the server-side total so counts stay honest even when the
+  column only holds a slice.
+- **Server-side toolbar search.** The toolbar search input debounces
+  ~200ms and calls `resetAndFetch({ q, ... })` on the active store, with
+  an `AbortController` on every fetch so a slow first page cannot
+  overwrite the results of a newer query. Changing sprint / assignee /
+  type / status / sort chips also triggers `resetAndFetch` and scrolls
+  back to page 1.
+- **`pagedTickets` singleton + `createPagedTicketStore()` factory.** New
+  in `src/web/src/lib/stores.ts`; exposes reactive `items`, `nextCursor`,
+  `total`, `loading` stores plus `resetAndFetch(query)`, `fetchNextPage()`
+  and `applyEvent(evt)` for WS-driven mutations.
+- **`ticketEvents.ts` shared WS bus.** Single lazily-created WebSocket
+  connection fanned out to all panels that need `ticket_*` events
+  (Sidebar summary, SprintPanel, UserPanel, CommandPalette, TicketPanel
+  dep picker). Torn down when the last subscriber unmounts, so closed
+  panels impose zero ambient traffic. Replaces the pattern of each panel
+  opening its own duplicate socket.
+
+### Changed
+- `+page.svelte` routes `ticket_created` / `ticket_updated` /
+  `ticket_deleted` WS events to `pagedTickets.applyEvent(...)` instead of
+  refetching the full ticket list. New rows insert in the correct sort
+  position on page 1 or are ignored past the cursor to avoid
+  double-counting on the next fetch; updates mutate in place; deletes
+  drop the row from every loaded page.
+
+### Docs
+- README: new **Search + infinite scroll** subsection under Web UI, new
+  **Paged tickets** and **Ticket summary** subsections under REST API,
+  and `/api/tickets/summary` added to the endpoint list.
+
 ## [2.0.2] - 2026-07-16
 
 ### Fixed

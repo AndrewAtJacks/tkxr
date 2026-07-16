@@ -1,9 +1,19 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { onDestroy, onMount } from 'svelte';
-  import type { Sprint, Ticket, User } from '../lib/stores';
-  import { sprintStore, ticketStore, userStore } from '../lib/stores';
-  import { normalizeTicket, PRIORITY_ORDER } from '../lib/util';
+  import type { PagedTicketQuery, Sprint, Ticket, TicketSortBy, User } from '../lib/stores';
+  import { pagedTickets, sprintStore, ticketStore, userStore, claudeConfig } from '../lib/stores';
+  import { activeRunId } from '../lib/claudeRun';
+
+  // Local aliases so Svelte's `$store` auto-subscription can reach into the
+  // paged store's derived fields (auto-subscription only works on top-level
+  // identifiers, not on `pagedTickets.items`).
+  const pagedItems = pagedTickets.items;
+  const pagedTotal = pagedTickets.total;
+  // Surface the store's loading flag to the Toolbar so it can show a small
+  // spinner while the debounced search / chip changes fetch page 1 from the
+  // server (tas-JC34zKX5).
+  const pagedLoading = pagedTickets.loading;
 
   import Sidebar from '../lib/Sidebar.svelte';
   import Toolbar from '../lib/Toolbar.svelte';
@@ -15,6 +25,7 @@
   import SprintPanel from '../lib/SprintPanel.svelte';
   import UserPanel from '../lib/UserPanel.svelte';
   import TriagePanel from '../lib/TriagePanel.svelte';
+  import ClaudeRunPanel from '../lib/ClaudeRunPanel.svelte';
   import CommandPalette from '../lib/CommandPalette.svelte';
   import Toaster from '../lib/Toaster.svelte';
 
@@ -85,7 +96,7 @@
   }
 
   onMount(() => {
-    reload();
+    reload().then(() => { mounted = true; });
     setupWs();
     window.addEventListener('keydown', onGlobalKey);
     return () => window.removeEventListener('keydown', onGlobalKey);
@@ -96,29 +107,60 @@
     if (ws) ws.close();
   });
 
+  // Build the paged-store query from the current UI filter state. Kept in one
+  // place so `reload()`, the reactive filter-change handler, and any imperative
+  // callers stay in lockstep. The server (tas-AEduZ-wc) handles filtering +
+  // sorting; we no longer touch the ticket array on the client.
+  function currentQuery(): PagedTicketQuery {
+    const q: PagedTicketQuery = {};
+    if (search) q.q = search;
+    if (activeSprint !== 'all') q.sprint = activeSprint; // 'none' passed through
+    if (activeUser !== 'all') q.assignee = activeUser;   // 'none' passed through
+    if (typeFilter !== 'all') q.type = typeFilter;
+    q.sortBy = sortBy as TicketSortBy;
+    return q;
+  }
+
   async function reload() {
+    // Ticket page 1 goes through the paged store; the rest are unchanged
+    // reference-data fetches. Kicking them off in parallel keeps latency close
+    // to the pre-paging bulk-load.
+    const ticketsP = pagedTickets.resetAndFetch(currentQuery());
     try {
-      const [tRes, sRes, uRes, cRes, ccRes] = await Promise.all([
-        fetch('/api/tickets'),
+      const [sRes, uRes, cRes, ccRes] = await Promise.all([
         fetch('/api/sprints'),
         fetch('/api/users'),
         fetch('/api/config'),
         fetch('/api/comments/counts'),
       ]);
-      if (tRes.ok) {
-        const tickets = (await tRes.json()).map(normalizeTicket);
-        ticketStore.set(tickets);
-      }
       if (sRes.ok) sprintStore.set(await sRes.json());
       if (uRes.ok) userStore.set(await uRes.json());
       if (cRes.ok) {
         const j = await cRes.json();
         if (j.version) version = `v${j.version}`;
+        // Populate the claude CLI capability store so downstream panels
+        // (tas-T8ZXseeD et al.) can branch between "Run in Claude" and
+        // `copyPrompt` (clipboard.ts) from first paint. Docs §5.
+        if (j.claude) claudeConfig.set(j.claude);
+        else claudeConfig.set({ available: false, bin: '' });
       }
       if (ccRes.ok) {
         commentCounts = await ccRes.json();
       }
     } catch { /* noop */ }
+    await ticketsP;
+  }
+
+  // Any UI filter/sort/search change refetches page 1 with the new query.
+  // The server owns filtering + sorting now, so this is the only place that
+  // needs to react — the old client-side filter block is gone. We gate on
+  // `mounted` so the initial `reload()` (which itself does the first fetch)
+  // isn't racing with this reactive statement's mount-time fire.
+  let mounted = false;
+  $: if (browser && mounted) {
+    // Read all filter inputs so Svelte tracks them, then fire-and-forget.
+    void activeSprint; void activeUser; void typeFilter; void sortBy; void search;
+    pagedTickets.resetAndFetch(currentQuery());
   }
 
   async function refreshCommentCounts() {
@@ -143,6 +185,18 @@
             refreshCommentCounts();
             return;
           }
+          // Paged-aware ticket handling (tas-98YN7GqK): let the paged store patch
+          // its own visible slice instead of dropping every loaded page with a
+          // bulk `reload()`. Sidebar/triage summary counts are handled by
+          // `Sidebar.svelte`'s own subscription to the shared `ticketEvents.ts`
+          // bus (with 500ms coalescing), so nothing to do for that here.
+          if (m.type === 'ticket_created' || m.type === 'ticket_updated' || m.type === 'ticket_deleted') {
+            pagedTickets.applyEvent(m);
+            return;
+          }
+          // Sprint/user events still trigger the bulk reference-data refresh
+          // (sprintStore, userStore) — cheap fetches, and the paged store's
+          // filter view depends on their current shape.
           reload();
         } catch { /* noop */ }
       };
@@ -167,42 +221,25 @@
     if (e.key.toLowerCase() === 'l') { view = 'list'; panel = null; }
   }
 
-  // Filters
-  $: filtered = ($ticketStore as Ticket[])
-    .filter(t => {
-      if (activeSprint === 'all') { /* no filter */ }
-      else if (activeSprint === 'none') { if (t.sprint) return false; }
-      else if (t.sprint !== activeSprint) return false;
+  // Filtering + sorting live on the server now (tas-AEduZ-wc). The paged
+  // store already holds the current page in server order; we just re-alias it
+  // as `filtered` so the existing template bindings stay put.
+  $: filtered = $pagedItems as Ticket[];
 
-      if (activeUser === 'all') { /* no filter */ }
-      else if (activeUser === 'none') { if (t.assignee) return false; }
-      else if (t.assignee !== activeUser) return false;
-
-      if (typeFilter !== 'all' && t.type !== typeFilter) return false;
-
-      if (search) {
-        const q = search.toLowerCase();
-        const hay = `${t.title} ${t.description || ''} ${t.id}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    })
-    .sort((a, b) => {
-      switch (sortBy) {
-        case 'title': return a.title.localeCompare(b.title);
-        case 'created': return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-        case 'priority': {
-          const av = PRIORITY_ORDER[a.priority || 'medium'];
-          const bv = PRIORITY_ORDER[b.priority || 'medium'];
-          if (av !== bv) return av - bv;
-          if (a.type === 'bug' && b.type === 'task') return -1;
-          if (a.type === 'task' && b.type === 'bug') return 1;
-          return 0;
-        }
-        case 'updated':
-        default: return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-      }
-    });
+  // Board owns its own per-column paged stores (tas-MKYRoS6x) and takes the
+  // toolbar filter state as a `query` prop; recompute it reactively so the
+  // Board's five column stores reset together on any filter change.
+  $: boardQuery = (() => {
+    // Re-reference to make Svelte tracking explicit.
+    void search; void activeSprint; void activeUser; void typeFilter; void sortBy;
+    const q: PagedTicketQuery = {};
+    if (search) q.q = search;
+    if (activeSprint !== 'all') q.sprint = activeSprint;
+    if (activeUser !== 'all') q.assignee = activeUser;
+    if (typeFilter !== 'all') q.type = typeFilter;
+    q.sortBy = sortBy as TicketSortBy;
+    return q;
+  })();
 
   $: contextTitle = (() => {
     if (activeSprint !== 'all' && activeSprint !== 'none') {
@@ -229,6 +266,12 @@
   })();
 
   // Sprint burn strip
+  // NOTE: `$ticketStore` now mirrors the *current page* of the paged store, not
+  // the full server-side dataset. When the active sprint is filtered in the
+  // toolbar, the current page is already scoped to that sprint so this reads
+  // correctly; when it isn't, this can under-count. tas-z-8q_Ljc will move the
+  // burn strip to the `/api/tickets/summary` endpoint (tas-4MNJ9qP5) — no
+  // client-side sum needed then.
   $: burn = (() => {
     if (activeSprint === 'all' || activeSprint === 'none') return null;
     const scoped = ($ticketStore as Ticket[]).filter(t => t.sprint === activeSprint);
@@ -237,7 +280,9 @@
     return { done, total };
   })();
 
-  // Triage findings count (rough, drives sidebar pill)
+  // Triage findings count (rough, drives sidebar pill).
+  // NOTE: same paged-store caveat as `burn` above — this is only fully accurate
+  // once the sidebar pill switches to `/api/tickets/summary` (tas-4MNJ9qP5).
   $: triageCount = (() => {
     const open = ($ticketStore as Ticket[]).filter(t => t.status !== 'done');
     let n = 0;
@@ -325,7 +370,8 @@
     <Toolbar
       title={contextTitle}
       subtitle={contextSubtitle}
-      shown={filtered.length}
+      shown={$pagedTotal}
+      loading={$pagedLoading}
       {search}
       {typeFilter}
       {sortBy}
@@ -342,7 +388,7 @@
     <div class="view">
       {#if view === 'board'}
         <Board
-          tickets={filtered}
+          query={boardQuery}
           sprints={$sprintStore}
           users={$userStore}
           {commentCounts}
@@ -416,6 +462,17 @@
       }}
     />
   {/if}
+</WorkspacePanel>
+
+<!--
+  Claude run panel — separate from the ticket/sprint/user/triage panel above.
+  Opened automatically by `runPrompt` (claudeRun.ts) on the first successful
+  run, and stays open until the user closes it via the header X. Downstream
+  panels (TicketPanel/SprintPanel/TriagePanel — tas-*) trigger runs via the
+  shared helper; they don't need to know this panel exists.
+-->
+<WorkspacePanel open={$activeRunId !== null} on:close={() => activeRunId.set(null)}>
+  <ClaudeRunPanel on:close={() => activeRunId.set(null)} />
 </WorkspacePanel>
 
 <Toaster />
