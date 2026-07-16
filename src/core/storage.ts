@@ -119,13 +119,9 @@ export class ProjectStorage {
   }
 
   async updateSprintStatus(id: string, status: Sprint['status']): Promise<Sprint | null> {
-    const sprints = await this.getSprints();
-    const sprint = sprints.find(s => s.id === id);
-    if (!sprint) return null;
-    sprint.status = status;
-    sprint.updatedAt = new Date();
-    await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
-    return sprint;
+    // Route through updateSprint so status-transition hooks (e.g. auto-close worktree on
+    // completed) fire consistently across all paths.
+    return this.updateSprint(id, { status });
   }
 
   async updateSprint(id: string, updates: Partial<Pick<Sprint, 'name' | 'description' | 'goal' | 'startDate' | 'endDate' | 'status' | 'worktree'>>): Promise<Sprint | null> {
@@ -135,6 +131,23 @@ export class ProjectStorage {
     Object.assign(sprint, updates);
     sprint.updatedAt = new Date();
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
+
+    // Auto-close sprint worktree when moved to completed (best effort, keep the branch —
+    // it may still be pending an upstream merge / PR).
+    if (sprint.status === 'completed' && sprint.worktree && updates.worktree === undefined) {
+      const wt = sprint.worktree;
+      try {
+        if (await isGitRepo()) {
+          await removeWorktree({ path: wt.path, branch: wt.branch, force: false, keepBranch: true });
+          sprint.worktree = null;
+          sprint.updatedAt = new Date();
+          await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
+        }
+      } catch {
+        // Dirty / already gone / locked — leave sprint.worktree as-is so the human sees + decides.
+      }
+    }
+
     return sprint;
   }
 
