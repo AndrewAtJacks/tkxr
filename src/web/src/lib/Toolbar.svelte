@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onDestroy } from 'svelte';
   import Search from './icons/Search.svelte';
   import Plus from './icons/Plus.svelte';
 
@@ -9,8 +9,63 @@
   export let search = '';
   export let typeFilter: 'all' | 'task' | 'bug' = 'all';
   export let sortBy = 'updated';
+  /**
+   * True while the paged ticket store has a fetch in-flight. Drives a subtle
+   * spinner glyph next to the "N shown" counter so users get feedback that a
+   * server-side query is running after they type. Deliberately understated —
+   * this is UX polish, not a full skeleton system (see tas-JC34zKX5).
+   */
+  export let loading = false;
 
   const dispatch = createEventDispatcher();
+
+  // Local mirror of the search prop so keystrokes update the input immediately
+  // while we debounce the outgoing `search` event. Kept in sync when the parent
+  // hydrates `search` from localStorage (`+page.svelte` boot) or otherwise
+  // reassigns it programmatically.
+  let localSearch = search;
+  let lastEmitted = search;
+  // Watch for external `search` changes and fold them into the local mirror so
+  // the input reflects the source of truth without echoing back through the
+  // dispatcher (which would double-fire the reactive refetch upstream).
+  $: if (search !== lastEmitted) {
+    localSearch = search;
+    lastEmitted = search;
+  }
+
+  // Debounce window for search keystrokes. ~200ms sits in the sweet spot the
+  // ticket calls for (150–250ms) — long enough to coalesce fast typing into a
+  // single request, short enough that the results feel immediate at rest.
+  const SEARCH_DEBOUNCE_MS = 200;
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function onSearchInput(value: string) {
+    localSearch = value;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      // Skip the dispatch if nothing changed since our last emit — avoids a
+      // redundant server hit when the user types then deletes back to the
+      // same string within the debounce window.
+      if (value === lastEmitted) return;
+      lastEmitted = value;
+      dispatch('search', value);
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  // Enter should force an immediate query without waiting out the debounce so
+  // power users who hit return get instant feedback. Cancels any pending timer.
+  function onSearchKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+    if (localSearch === lastEmitted) return;
+    lastEmitted = localSearch;
+    dispatch('search', localSearch);
+  }
+
+  onDestroy(() => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+  });
 
   function chipStyle(active: boolean): string {
     return `padding:5px 10px;border-radius:6px;background:${active ? 'var(--chip)' : 'transparent'};color:${active ? 'var(--text)' : 'var(--muted)'};font-weight:${active ? 600 : 500};font-size:11.5px;border:none;cursor:pointer;`;
@@ -21,7 +76,12 @@
   <div class="left">
     <div class="title-row">
       <span class="title">{title}</span>
-      <span class="mono shown">{shown} shown</span>
+      <span class="mono shown">
+        {shown} shown
+        {#if loading}
+          <span class="spinner" aria-label="loading" title="Loading tickets…"></span>
+        {/if}
+      </span>
     </div>
     {#if subtitle}
       <div class="subtitle">{subtitle}</div>
@@ -29,14 +89,15 @@
   </div>
 
   <div class="right">
-    <label class="search">
+    <label class="search" class:loading>
       <Search size={14} color="var(--muted)" />
       <input
         id="toolbar-search"
         type="text"
         placeholder="Filter tickets…  /"
-        value={search}
-        on:input={(e) => dispatch('search', e.currentTarget.value)}
+        value={localSearch}
+        on:input={(e) => onSearchInput(e.currentTarget.value)}
+        on:keydown={onSearchKeydown}
       />
     </label>
 
@@ -74,7 +135,24 @@
   .left { min-width: 0; }
   .title-row { display: flex; align-items: baseline; gap: 10px; }
   .title { font-size: 16px; font-weight: 600; color: var(--text); }
-  .shown { font-size: 10.5px; color: var(--faint); }
+  .shown {
+    font-size: 10.5px;
+    color: var(--faint);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .spinner {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border);
+    border-top-color: var(--accent);
+    animation: tk-spin 0.7s linear infinite;
+  }
+  @keyframes tk-spin { to { transform: rotate(360deg); } }
+  .search.loading { border-color: var(--accent); }
   .subtitle {
     font-size: 11.5px;
     color: var(--muted);

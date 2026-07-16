@@ -10,6 +10,10 @@
   // identifiers, not on `pagedTickets.items`).
   const pagedItems = pagedTickets.items;
   const pagedTotal = pagedTickets.total;
+  // Surface the store's loading flag to the Toolbar so it can show a small
+  // spinner while the debounced search / chip changes fetch page 1 from the
+  // server (tas-JC34zKX5).
+  const pagedLoading = pagedTickets.loading;
 
   import Sidebar from '../lib/Sidebar.svelte';
   import Toolbar from '../lib/Toolbar.svelte';
@@ -340,6 +344,7 @@
       title={contextTitle}
       subtitle={contextSubtitle}
       shown={$pagedTotal}
+      loading={$pagedLoading}
       {search}
       {typeFilter}
       {sortBy}

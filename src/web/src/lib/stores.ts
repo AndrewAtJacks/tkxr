@@ -208,13 +208,21 @@ export function createPagedTicketStore(): PagedTicketStore {
   // Monotonic fetch id so a stale in-flight response can't overwrite fresher
   // state when the user rapidly changes filters.
   let fetchSeq = 0;
+  // Track the in-flight AbortController so a rapid `resetAndFetch` (typing in
+  // the debounced search box, chip mashing) actually cancels the outstanding
+  // request instead of just letting the seq guard drop the response. Cancels
+  // save the roundtrip for the browser and let the server stop early too.
+  let inflightAbort: AbortController | null = null;
 
   async function doFetch(query: PagedTicketQuery, cursor: string | null, append: boolean): Promise<void> {
     const seq = ++fetchSeq;
+    if (inflightAbort) inflightAbort.abort();
+    const ac = new AbortController();
+    inflightAbort = ac;
     state.update(s => ({ ...s, loading: true, error: null, query }));
     try {
       const qs = buildQueryString(query, cursor);
-      const res = await fetch(`/api/tickets?${qs}`);
+      const res = await fetch(`/api/tickets?${qs}`, { signal: ac.signal });
       if (!res.ok) throw new Error(`GET /api/tickets ${res.status}`);
       const body = await res.json();
       // Defensive: if the server took the legacy path (shouldn't happen because
@@ -235,9 +243,15 @@ export function createPagedTicketStore(): PagedTicketStore {
         error: null,
       }));
     } catch (err) {
+      // An abort from a superseding fetch is expected; don't surface it as an
+      // error and don't touch loading here — the newer fetch already flipped
+      // it to true and will flip it back when it settles.
+      if ((err as any)?.name === 'AbortError') return;
       if (seq !== fetchSeq) return;
       const message = err instanceof Error ? err.message : String(err);
       state.update(s => ({ ...s, loading: false, error: message }));
+    } finally {
+      if (inflightAbort === ac) inflightAbort = null;
     }
   }
 
