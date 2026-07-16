@@ -645,32 +645,35 @@ export async function startServer(args: ServeArgs): Promise<void> {
     broadcast: (ev) => broadcast(wss, { type: ev.type, data: ev.data }),
   };
 
-  const mcpServer = new McpServer(
-    { name: 'tkxr-mcp', version },
-    { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS },
-  );
-  mcpServer.setRequestHandler(InitializeRequestSchema, async () => ({
-    protocolVersion: '2024-11-05',
-    capabilities: { tools: {} },
-    serverInfo: { name: 'tkxr-mcp', version },
-    instructions: SERVER_INSTRUCTIONS,
-  }));
-  mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
-  }));
-  mcpServer.setRequestHandler(CallToolRequestSchema, async (request): Promise<any> => {
-    const { name, arguments: args } = request.params;
-    const tool = TOOL_MAP[name];
-    if (!tool) return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
-    try {
-      return await tool.handler(args || {}, mcpCtx);
-    } catch (error) {
-      return {
-        content: [{ type: 'text', text: `Error executing ${name}: ${error instanceof Error ? error.message : String(error)}` }],
-        isError: true,
-      };
-    }
-  });
+  function createMcpServer(): McpServer {
+    const s = new McpServer(
+      { name: 'tkxr-mcp', version },
+      { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS },
+    );
+    s.setRequestHandler(InitializeRequestSchema, async () => ({
+      protocolVersion: '2024-11-05',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'tkxr-mcp', version },
+      instructions: SERVER_INSTRUCTIONS,
+    }));
+    s.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+    }));
+    s.setRequestHandler(CallToolRequestSchema, async (request): Promise<any> => {
+      const { name, arguments: args } = request.params;
+      const tool = TOOL_MAP[name];
+      if (!tool) return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+      try {
+        return await tool.handler(args || {}, mcpCtx);
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: `Error executing ${name}: ${error instanceof Error ? error.message : String(error)}` }],
+          isError: true,
+        };
+      }
+    });
+    return s;
+  }
 
   // Session map for stateful HTTP transports (one transport per session id).
   const mcpTransports = new Map<string, StreamableHTTPServerTransport>();
@@ -687,7 +690,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
       transport.onclose = () => {
         if (transport!.sessionId) mcpTransports.delete(transport!.sessionId);
       };
-      await mcpServer.connect(transport);
+      await createMcpServer().connect(transport);
     }
 
     try {

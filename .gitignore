@@ -46,3 +46,4 @@ tkxr/
 # pnpm-lock.yaml
 
 .npmrc
+.mcp.json
