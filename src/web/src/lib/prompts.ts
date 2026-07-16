@@ -314,6 +314,97 @@ export function orchestrateSprintPrompt(sprint: Sprint, tickets: Ticket[], users
   ].join('\n');
 }
 
+export function sprintBreakdownPrompt(sprint: Sprint, existingTickets: Ticket[], users: User[]): string {
+  const scoped = existingTickets.filter(t => t.sprint === sprint.id);
+  const scopedProjection = scoped.map(t => {
+    const a = t.assignee ? users.find(u => u.id === t.assignee) : null;
+    const out: any = {
+      id: t.id,
+      type: t.type,
+      title: t.title,
+      status: t.status,
+      priority: t.priority || null,
+      estimate: t.estimate ?? null,
+      assignee: a ? `@${a.username}` : null,
+    };
+    if (t.labels && t.labels.length > 0) out.labels = t.labels;
+    if (t.description && t.description.trim()) out.description = t.description;
+    if (t.dependsOn && t.dependsOn.length > 0) out.dependsOn = t.dependsOn;
+    return out;
+  });
+  const userProjection = users.map(u => ({ id: u.id, username: `@${u.username}`, displayName: u.displayName }));
+
+  const anchorTicketId = scoped.length > 0 ? scoped[0].id : null;
+
+  const hasWorktree = !!sprint.worktree;
+  const wtPath = sprint.worktree?.path || '<sprint worktree path>';
+
+  return [
+    `# tkxr — Plan sprint "${sprint.name}" (${sprint.id})`,
+    ``,
+    `You are the **sprint planner**. Your job is to turn the sprint's goal into a concrete set of child tickets — no code, no status flips on existing work. Just research, then create tickets.`,
+    ``,
+    hasWorktree
+      ? `The sprint has a worktree at \`${wtPath}\`. \`cd\` there so any repo exploration reflects the sprint branch.`
+      : `The sprint has no worktree yet — that's fine. Run your repo research against the current checkout.`,
+    ``,
+    `## Sprint goal`,
+    sprint.goal ? sprint.goal : `(no goal set — STOP and ask the user for one before doing anything.)`,
+    ``,
+    `## Suggested flow`,
+    `1. Re-read the sprint goal above. If it's ambiguous, one-line-summarise your interpretation and ASK the user to confirm before creating anything. Do not guess silently.`,
+    `2. Read every ticket already attached to the sprint (see JSON below) so you don't duplicate scope.`,
+    `3. Explore the repo with your own tools — grep, read files, check package.json / docs / relevant modules. Ground the breakdown in what actually exists.`,
+    `4. Design the breakdown:`,
+    `   - Aim for the smallest set of tickets that fully covers the goal.`,
+    `   - **Hard cap: 12 new tickets.** If you're tempted to go past that, stop and ask the user how to scope down.`,
+    `   - Each ticket should be independently reviewable (one branch, one merge).`,
+    `   - Split into **waves** using \`dependsOn\`: Wave 1 = no deps, Wave 2 = depends only on Wave 1, etc. This lets the orchestrator fan them out in parallel per wave.`,
+    `5. For each proposed ticket, call \`create_ticket\` (MCP) exactly once with:`,
+    `   - \`title\`: short, imperative.`,
+    `   - \`description\`: enough context for another agent to pick it up cold — reference specific files/functions when possible.`,
+    `   - \`type\`: \`task\` (default) or \`bug\` if you're capturing a defect uncovered during research.`,
+    `   - \`sprint\`: \`"${sprint.id}"\` — always, so it lands in this sprint.`,
+    `   - \`estimate\`: story points (1 = trivial, 2 = half day, 3 = day, 5 = multi-day, 8 = week-ish).`,
+    `   - \`priority\`: \`low\` | \`medium\` | \`high\` | \`critical\`.`,
+    `   - \`labels\`: reuse existing labels where sensible (see attached tickets for patterns).`,
+    `   - \`dependsOn\`: array of the ids of other **new tickets you just created** that must land first. Only reference ticket ids you know exist (i.e. previous \`create_ticket\` return values or already-attached tickets).`,
+    `   - Do NOT set \`assignee\` unless a user obviously owns the area — leave it null for the human to route.`,
+    `6. Post ONE summary comment on ${anchorTicketId ? `the sprint's first ticket (\`${anchorTicketId}\`)` : `a dedicated "plan" ticket you create first (title: "Sprint plan: ${sprint.name}", type: task, priority: medium)`} via \`add_comment\`. The comment should:`,
+    `   - List each wave and which ticket ids belong to it.`,
+    `   - Give a one-line reasoning for the wave ordering.`,
+    `   - Call out any assumptions you made about the goal.`,
+    ``,
+    `## Guardrails (non-negotiable)`,
+    `- Do NOT edit or delete any existing ticket. No \`edit_ticket\`, no \`delete_ticket\`.`,
+    `- Do NOT call \`update_ticket_status\` on anything — new or existing. New tickets start in \`backlog\` by default; that's correct.`,
+    `- Do NOT create the sprint or change sprint metadata. It already exists.`,
+    `- Do NOT assign yourself or others; leave routing to the human.`,
+    `- If the goal is ambiguous, contradictory, or already fully covered by existing tickets, STOP and ask before creating anything.`,
+    `- Cap: ~12 new tickets. Fewer is better.`,
+    ``,
+    `## Sprint context`,
+    '```json',
+    JSON.stringify({
+      id: sprint.id,
+      name: sprint.name,
+      goal: sprint.goal || null,
+      status: sprint.status,
+      worktree: sprint.worktree ? { path: sprint.worktree.path, branch: sprint.worktree.branch } : null,
+      existingTicketCount: scopedProjection.length,
+      existingTickets: scopedProjection,
+    }, null, 2),
+    '```',
+    ``,
+    `## Users (for reference — do NOT auto-assign)`,
+    '```json',
+    JSON.stringify(userProjection, null, 2),
+    '```',
+    ``,
+    MCP_REMINDER,
+  ].join('\n');
+}
+
 export function sprintPlanPrompt(sprints: Sprint[], tickets: Ticket[], users: User[]): string {
   const backlog = tickets.filter(t => t.status === 'backlog' && !t.sprint);
   const projection = backlog.map(t => {

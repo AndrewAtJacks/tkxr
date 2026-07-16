@@ -140,6 +140,15 @@ different tickets simultaneously without stepping on each other's branch state.
 If you're about to work on a ticket and \`ticket.worktree\` is null, consider
 creating one first — then \`cd\` into it and do the work there. Commits inside a
 worktree are just regular commits on that branch; push and PR as normal.
+
+## Claude CLI runner (out-of-band)
+The \`tkxr serve\` HTTP surface also exposes a \`claude\` CLI runner at
+\`POST /api/claude/run\` + \`POST /api/claude/cancel\`, streaming output over
+the WebSocket as \`claude_run_started | claude_run_chunk | claude_run_exit\`
+events. It is **not** an MCP tool — the web UI drives it directly to power
+"Run in Claude" / "Plan with Claude" buttons, with a clipboard fallback
+when the binary is missing. Agents connected via MCP should keep using
+their own LLM loop; the endpoint is here for the human-facing UI.
 `;
 
 export const TOOLS: ToolDef[] = [

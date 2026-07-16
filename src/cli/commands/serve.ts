@@ -17,7 +17,16 @@ import {
 import { createStorage } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
 import { SERVER_INSTRUCTIONS, TOOL_MAP, TOOLS, type ToolContext } from '../../mcp/tools.js';
-import { createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree } from '../../core/worktree.js';
+import { createSprintWorktree, createWorktree, getRepoRoot, isGitRepo, listWorktrees, removeWorktree } from '../../core/worktree.js';
+import {
+  discoverClaude,
+  killWithGrace,
+  spawnClaude,
+  toPublicConfig,
+  type ClaudeConfig,
+  type ClaudeRun,
+} from '../../core/claude.js';
+import type { ChildProcessWithoutNullStreams } from 'child_process';
 
 interface ServeArgs extends minimist.ParsedArgs {
   port?: number;
@@ -39,6 +48,20 @@ export async function startServer(args: ServeArgs): Promise<void> {
   const wss = new WebSocketServer({ server });
   
   const storage = await createStorage();
+
+  // Probe the user's `claude` CLI once at boot. Cached on `app.locals.claude`
+  // so `GET /api/config` and the downstream spawn handler (tas-5j83ACCR) both
+  // read from a single source of truth — no re-probing per request. See
+  // `docs/claude-cli-integration.md` §2 for env precedence.
+  const claudeConfig: ClaudeConfig = await discoverClaude();
+  app.locals.claude = claudeConfig;
+  if (claudeConfig.disabled) {
+    console.log(chalk.dim('claude CLI: disabled via TKXR_CLAUDE_DISABLED (clipboard fallback active)'));
+  } else if (claudeConfig.available) {
+    console.log(chalk.dim(`claude CLI: ${claudeConfig.bin}${claudeConfig.version ? ` (v${claudeConfig.version})` : ''}`));
+  } else {
+    console.log(chalk.dim('claude CLI: not found on PATH (clipboard fallback active)'));
+  }
 
   // Ensure the process is running from the appropriate `dist` directory so relative
   // paths to `package.json` and the `web` assets resolve correctly.
@@ -110,9 +133,28 @@ export async function startServer(args: ServeArgs): Promise<void> {
   }
 
   // Middleware
-  app.use(express.json());
+  app.use(express.json({ limit: '2mb' })); // prompts can grow past the default 100kb
   // Serve static assets from the `web` folder inside `dist` (we may have chdir'd to dist)
   app.use(express.static(path.join(process.cwd(), 'web')));
+
+  // Live runs: `runId` -> handle. Discovery already ran at boot (above) and
+  // populated `app.locals.claude`; the run/cancel endpoints consume that
+  // canonical config — no re-probing per request. See docs §3.
+  const claudeRuns = new Map<string, ClaudeRun>();
+
+  async function resolveClaudeCwd(requested: string | undefined): Promise<string> {
+    const repoRoot = path.resolve(await getRepoRoot());
+    if (!requested) return repoRoot;
+    const normalized = path.resolve(requested);
+    if (normalized === repoRoot) return repoRoot;
+    const worktrees = await listWorktrees();
+    const allowed = new Set(worktrees.map(w => path.resolve(w.path)));
+    allowed.add(repoRoot);
+    if (!allowed.has(normalized)) {
+      throw Object.assign(new Error('bad_cwd'), { statusCode: 403, code: 'bad_cwd' });
+    }
+    return normalized;
+  }
 
   // API Routes
   app.get('/api/tickets', async (req, res) => {
@@ -157,14 +199,22 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
-  // Serve server configuration for dynamic client discovery
+  // Serve server configuration for dynamic client discovery.
+  // NOTE: the `claude` sub-object is populated here as a courtesy so the runner
+  // ticket (tas-5j83ACCR) doesn't leave the field undefined. The config ticket
+  // (tas-6XZPfKnY) is the canonical owner of this payload shape and may extend it.
   app.get('/api/config', async (req, res) => {
     try {
+      // `claude` block populated once at boot from `discoverClaude()` (§2 of
+      // docs/claude-cli-integration.md). Web store `claudeConfig` reads this
+      // to decide between "Run in Claude" and the existing "Copy prompt" flow.
+      const cached: ClaudeConfig = app.locals.claude ?? { available: false, bin: '' };
       res.json({
         host: 'localhost',
         port: port,
         url: `http://localhost:${port}`,
-        version: version
+        version: version,
+        claude: toPublicConfig(cached),
       });
     } catch (error) {
       res.status(500).json({ error: 'Failed to get server config' });
@@ -981,6 +1031,184 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
+  // -------------------- Claude CLI: run + cancel --------------------
+  // POST /api/claude/run  body: { prompt, cwd?, runId?, label? }
+  //   - Validates cwd against getRepoRoot() + listWorktrees() (workspace-escape defense).
+  //   - Spawns `claude -p --output-format stream-json --verbose`, prompt on stdin.
+  //   - Streams stdout frames as `claude_run_chunk` events over the shared WS.
+  //   - 503 { code: 'claude_unavailable' } when the binary is missing.
+  // POST /api/claude/cancel  body: { runId } -> SIGTERM (SIGKILL after 2s grace).
+  //
+  // Event shapes (see docs §3):
+  //   claude_run_started { runId, cwd, label, startedAt }
+  //   claude_run_chunk   { runId, stream: 'stdout'|'stderr', frame }
+  //   claude_run_exit    { runId, ok, exitCode, signal, durationMs, costUsd?, isError? }
+
+  app.post('/api/claude/run', async (req, res) => {
+    // Read the canonical Claude config populated at boot by tas-6XZPfKnY. Never
+    // re-probe here — spawn errors below flip availability if the binary vanished.
+    const claude: ClaudeConfig = app.locals.claude ?? { available: false, bin: '' };
+    if (!claude.available) {
+      return res.status(503).json({ error: { code: 'claude_unavailable', message: 'claude CLI not found on server' } });
+    }
+
+    const { prompt, cwd: rawCwd, runId: rawRunId, label } = req.body || {};
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+      return res.status(400).json({ error: { code: 'bad_input', message: 'prompt required' } });
+    }
+    if (rawCwd !== undefined && typeof rawCwd !== 'string') {
+      return res.status(400).json({ error: { code: 'bad_input', message: 'cwd must be a string' } });
+    }
+    if (rawRunId !== undefined && typeof rawRunId !== 'string') {
+      return res.status(400).json({ error: { code: 'bad_input', message: 'runId must be a string' } });
+    }
+
+    let cwd: string;
+    try {
+      cwd = await resolveClaudeCwd(rawCwd);
+    } catch (error: any) {
+      if (error?.code === 'bad_cwd') {
+        return res.status(403).json({ error: { code: 'bad_cwd', message: 'cwd must be the repo root or a registered worktree path' } });
+      }
+      return res.status(500).json({ error: { code: 'cwd_resolve_failed', message: error?.message || 'failed to resolve cwd' } });
+    }
+
+    const runId = rawRunId || randomUUID();
+    if (claudeRuns.has(runId)) {
+      return res.status(409).json({ error: { code: 'run_exists', message: `runId ${runId} already active` } });
+    }
+
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawnClaude({
+        prompt,
+        cwd,
+        bin: claude.bin,
+        // Use the pre-parsed extraArgs from discovery when present; the config
+        // ticket already tokenized TKXR_CLAUDE_ARGS at boot.
+        extraArgs: claude.extraArgs,
+      });
+    } catch (error: any) {
+      // Binary went missing between discovery and now — flip availability and 503.
+      if (error?.code === 'ENOENT') {
+        const disabled: ClaudeConfig = { ...claude, available: false };
+        app.locals.claude = disabled;
+        return res.status(503).json({ error: { code: 'claude_unavailable', message: 'claude binary vanished after boot' } });
+      }
+      return res.status(500).json({ error: { code: 'spawn_failed', message: error?.message || 'spawn failed' } });
+    }
+
+    const startedAt = Date.now();
+    const run: ClaudeRun = {
+      runId,
+      child,
+      frames: [],
+      stderrBuf: [],
+      startedAt,
+      cwd,
+      label: typeof label === 'string' ? label : undefined,
+      stdoutBuf: '',
+    };
+    claudeRuns.set(runId, run);
+
+    broadcast(wss, {
+      type: 'claude_run_started',
+      data: { runId, cwd, label: run.label, startedAt },
+    });
+
+    // Parse JSONL frames on stdout. Each non-empty line is a stream-json event.
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      run.stdoutBuf += chunk;
+      let idx: number;
+      while ((idx = run.stdoutBuf.indexOf('\n')) >= 0) {
+        const line = run.stdoutBuf.slice(0, idx).replace(/\r$/, '');
+        run.stdoutBuf = run.stdoutBuf.slice(idx + 1);
+        if (!line.trim()) continue;
+        let frame: any;
+        try {
+          frame = JSON.parse(line);
+        } catch {
+          // Non-JSON line — forward raw so clients can surface it as-is.
+          frame = { type: 'raw', line };
+        }
+        run.frames.push(frame);
+        broadcast(wss, { type: 'claude_run_chunk', data: { runId, stream: 'stdout', frame } });
+      }
+    });
+
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      run.stderrBuf.push(chunk);
+      broadcast(wss, {
+        type: 'claude_run_chunk',
+        data: { runId, stream: 'stderr', frame: { type: 'stderr', text: chunk } },
+      });
+    });
+
+    child.on('error', (err) => {
+      // Deliver as a synthetic chunk so late-subscribers see it in the frame log.
+      broadcast(wss, {
+        type: 'claude_run_chunk',
+        data: { runId, stream: 'stderr', frame: { type: 'spawn_error', message: String(err?.message || err) } },
+      });
+    });
+
+    child.on('exit', (code, signal) => {
+      // Flush any trailing partial line as a raw frame.
+      const tail = run.stdoutBuf.trim();
+      if (tail) {
+        let frame: any;
+        try { frame = JSON.parse(tail); } catch { frame = { type: 'raw', line: tail }; }
+        run.frames.push(frame);
+        broadcast(wss, { type: 'claude_run_chunk', data: { runId, stream: 'stdout', frame } });
+      }
+      run.stdoutBuf = '';
+
+      const durationMs = Date.now() - startedAt;
+      // Pull cost + is_error off the terminal `result` frame if the CLI produced one.
+      const resultFrame = [...run.frames].reverse().find(f => f?.type === 'result');
+      const costUsd = typeof resultFrame?.total_cost_usd === 'number' ? resultFrame.total_cost_usd : undefined;
+      const isError = resultFrame?.is_error === true;
+
+      const cancelled = signal === 'SIGTERM' || signal === 'SIGKILL';
+      const ok = !cancelled && code === 0 && !isError;
+
+      broadcast(wss, {
+        type: 'claude_run_exit',
+        data: {
+          runId,
+          ok,
+          exitCode: code,
+          signal,
+          durationMs,
+          costUsd,
+          isError,
+          cancelled,
+          stderr: ok ? undefined : run.stderrBuf.join(''),
+        },
+      });
+
+      // Retain the run briefly so late-joining tabs can query state; then drop.
+      setTimeout(() => { claudeRuns.delete(runId); }, 30_000).unref?.();
+    });
+
+    res.json({ runId });
+  });
+
+  app.post('/api/claude/cancel', (req, res) => {
+    const { runId } = req.body || {};
+    if (!runId || typeof runId !== 'string') {
+      return res.status(400).json({ error: { code: 'bad_input', message: 'runId required' } });
+    }
+    const run = claudeRuns.get(runId);
+    if (!run) {
+      return res.status(404).json({ error: { code: 'not_found', message: `no active run ${runId}` } });
+    }
+    killWithGrace(run.child);
+    res.json({ cancelled: true, runId });
+  });
+
   // Serve web app for all other routes
   app.get('*', (req, res) => {
     res.sendFile(path.join(process.cwd(), 'web', 'index.html'));
@@ -1020,7 +1248,12 @@ export async function startServer(args: ServeArgs): Promise<void> {
   // Graceful shutdown
   process.on('SIGINT', () => {
     console.log(chalk.yellow('\n⏹️  Shutting down server...'));
-    
+
+    // Kill any live Claude runs so we don't orphan child processes.
+    for (const run of claudeRuns.values()) {
+      try { killWithGrace(run.child); } catch { /* noop */ }
+    }
+
     // Clean up server config file
     try {
       const configPath = path.join(process.cwd(), '.tkxr-server');
@@ -1028,7 +1261,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
     } catch (error) {
       // Ignore cleanup errors
     }
-    
+
     server.close(() => {
       console.log(chalk.green('Server stopped'));
       process.exit(0);

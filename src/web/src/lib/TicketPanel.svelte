@@ -1,8 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
-  import type { Sprint, Ticket, TicketComment, User } from './stores';
+  import { claudeConfig, type Sprint, type Ticket, type TicketComment, type User } from './stores';
   import { avatarColorFor, initials, PRIORITY_META, relativeTime, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
-  import { copyPrompt, copyToClipboard, showToast } from './clipboard';
+  import { copyToClipboard, showToast } from './clipboard';
+  import { runPrompt } from './claudeRun';
   import { currentUserId } from './currentUser';
   import { ticketAskPrompt, workOnTicketPrompt } from './prompts';
   import X from './icons/X.svelte';
@@ -117,7 +118,7 @@
   function copyAsk(prompt: string) {
     if (!ticket) return;
     const text = ticketAskPrompt(prompt, ticket, users, sprints, allTickets);
-    copyPrompt(text);
+    runPrompt(text, { cwd: ticket.worktree?.path, label: 'Ask about ' + ticket.id });
   }
   function copyAskFromInput() {
     const text = askInput.trim();
@@ -127,7 +128,10 @@
   }
   function copyWorkOn() {
     if (!ticket) return;
-    copyPrompt(workOnTicketPrompt(ticket, users, sprints, allTickets));
+    runPrompt(workOnTicketPrompt(ticket, users, sprints, allTickets), {
+      cwd: ticket.worktree?.path,
+      label: 'Work on ' + ticket.id,
+    });
   }
 
   let worktreeBusy = false;
@@ -551,7 +555,13 @@
         <Sparkles size={14} color="var(--ai)" />
         <span>Hand this ticket to an agent</span>
       </div>
-      <div class="ai-hint">Copies a prompt (ticket JSON + tkxr MCP reminder) to your clipboard. Paste into Claude Code.</div>
+      <div class="ai-hint">
+        {#if $claudeConfig?.available}
+          Runs the prompt (ticket JSON + tkxr MCP reminder) in the local Claude CLI. Output streams into the run panel.
+        {:else}
+          Copies a prompt (ticket JSON + tkxr MCP reminder) to your clipboard. Paste into Claude Code.
+        {/if}
+      </div>
 
       <button class="work-btn" on:click={copyWorkOn}>
         <Sparkles size={14} color="#fff" />
@@ -567,11 +577,11 @@
       <div class="ai-input">
         <input
           class="input"
-          placeholder="Custom question — copies as a prompt…"
+          placeholder={$claudeConfig?.available ? 'Custom question — runs in Claude…' : 'Custom question — copies as a prompt…'}
           bind:value={askInput}
           on:keydown={(e) => e.key === 'Enter' && copyAskFromInput()}
         />
-        <button class="btn" on:click={copyAskFromInput} disabled={!askInput.trim()}>Copy prompt</button>
+        <button class="btn" on:click={copyAskFromInput} disabled={!askInput.trim()}>{$claudeConfig?.available ? 'Run in Claude' : 'Copy prompt'}</button>
       </div>
     </div>
 

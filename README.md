@@ -419,8 +419,12 @@ POST   /api/ai/create
 POST   /api/ai/triage
 POST   /api/ai/plan
 
+# Claude CLI runner (streams over WebSocket, see Configuration section)
+POST   /api/claude/run                   ({ prompt, cwd?, runId?, label? })
+POST   /api/claude/cancel                ({ runId })
+
 # Server metadata
-GET    /api/config                       ({ host, port, url, version })
+GET    /api/config                       ({ host, port, url, version, claude })
 ```
 
 ### WebSocket
@@ -433,8 +437,13 @@ ws.onmessage = (ev) => {
   //      | comment_created | comment_deleted
   //      | sprint_created | sprint_updated | sprint_deleted
   //      | user_created | user_updated | user_deleted
+  //      | claude_run_started | claude_run_chunk | claude_run_exit
 };
 ```
+
+`claude_run_*` events stream stdout/stderr from `POST /api/claude/run` and
+are keyed by `runId`. See the Claude CLI integration section under
+Configuration for full payload shapes.
 
 ---
 
@@ -462,6 +471,102 @@ Override any of these with flags or env vars:
 ```bash
 pnpm dlx @legdev/tkxr serve --port 3000
 ```
+
+### Claude CLI integration
+
+`tkxr serve` probes for a working `claude` CLI once at boot (via `where` on
+Windows, `which` on macOS/Linux) and reports the result at `GET /api/config`
+under `claude: { available, bin, version, disabled }`. The web UI reads that
+store to decide between "Run in Claude" and the existing "Copy prompt"
+fallback — no config needed for the copy-paste path to keep working.
+
+Env vars honored by the discovery + spawn layer (see
+`docs/claude-cli-integration.md` for the full design):
+
+- `TKXR_CLAUDE_BIN` — absolute path or bare command name for the `claude`
+  executable. Default `claude`.
+- `TKXR_CLAUDE_ARGS` — extra flags forwarded to `claude -p` after the
+  built-in ones. Whitespace-split; no shell metacharacters are interpreted.
+- `TKXR_CLAUDE_DISABLED` — set to `1` / `true` / `yes` to force the
+  clipboard fallback even when the binary is present.
+- `TKXR_CLAUDE_FALLBACK_MODEL` — forwarded as `--fallback-model <value>`
+  when set.
+- `TKXR_CLAUDE_MAX_BUDGET_USD` — forwarded as `--max-budget-usd <value>`
+  when set.
+
+#### REST endpoints
+
+```
+POST /api/claude/run     body: { prompt, cwd?, runId?, label? }
+POST /api/claude/cancel  body: { runId }
+```
+
+- `run` validates `cwd` against the repo root + registered worktrees (so a
+  browser client can't escape the workspace), spawns
+  `claude -p --output-format stream-json --verbose` with the prompt on stdin,
+  and streams stdout frames over the shared WebSocket. Returns
+  `503 { error: { code: 'claude_unavailable' } }` when the binary is missing
+  (clients should fall back to `copyPrompt`). Assigns a `runId` if the caller
+  didn't supply one.
+- `cancel` sends `SIGTERM` (then `SIGKILL` after a 2 s grace) to the child
+  identified by `runId`.
+
+`GET /api/config` now includes the Claude block:
+
+```json
+{
+  "host": "localhost",
+  "port": 8080,
+  "url": "http://localhost:8080",
+  "version": "2.0.2",
+  "claude": { "available": true, "bin": "claude", "version": "1.2.3" }
+}
+```
+
+`disabled: true` is added when `TKXR_CLAUDE_DISABLED` is set.
+
+#### WebSocket events
+
+In addition to the existing `ticket_*` / `sprint_*` / `user_*` / `comment_*`
+broadcasts, a live `claude` run emits three event types, all keyed by
+`runId`:
+
+```
+claude_run_started  { runId, cwd, label, startedAt }
+claude_run_chunk    { runId, stream: 'stdout' | 'stderr', frame }
+claude_run_exit     { runId, ok, exitCode, signal, durationMs, costUsd?, isError? }
+```
+
+Late-joining subscribers can identify a run by its `runId` and replay any
+buffered frames the server still holds.
+
+#### Web UI behavior
+
+The action buttons in `TicketPanel`, `SprintPanel`, and `TriagePanel` swap
+their label based on `$claudeConfig.available`:
+
+- **Available** — button reads "Run in Claude" (or "Plan with Claude" for
+  planning actions) and streams live output into the workspace panel via
+  `ClaudeRunPanel.svelte`.
+- **Unavailable / disabled** — button reads "Copy prompt" (or "Copy plan
+  prompt" / "Copy triage prompt") and drops the prompt on the clipboard,
+  preserving the pre-integration flow.
+
+Sprints also get a **"Plan sprint with Claude"** action on `SprintPanel` and
+`TriagePanel` that runs the `sprintBreakdownPrompt` — Claude reads the
+sprint goal, drafts child tickets, and can create them via the MCP tools.
+
+#### Agent isolation
+
+Research ticket `tas-Ap8VMPuL` evaluated alternatives to git worktrees
+(filesystem snapshots, containers, in-process sandboxes) for concurrent
+agent isolation. **Outcome: kept git worktrees** — they remain the default
+and only production isolation strategy because they are the only option
+that is cross-platform (Windows-first), zero-setup, and gives full
+git-state isolation per agent. See
+[`docs/agent-isolation-alternatives.md`](docs/agent-isolation-alternatives.md)
+for the full comparison; the design spec for the CLI integration itself is
+in [`docs/claude-cli-integration.md`](docs/claude-cli-integration.md).
 
 ---
 

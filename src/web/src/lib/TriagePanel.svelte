@@ -1,8 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { Sprint, Ticket, User } from './stores';
-  import { copyPrompt } from './clipboard';
-  import { sprintPlanPrompt, triagePrompt } from './prompts';
+  import { claudeConfig } from './stores';
+  import { runPrompt } from './claudeRun';
+  import { sprintBreakdownPrompt, sprintPlanPrompt, triagePrompt } from './prompts';
   import Sparkles from './icons/Sparkles.svelte';
   import X from './icons/X.svelte';
 
@@ -71,11 +72,18 @@
   }
 
   function copyFullTriage() {
-    copyPrompt(triagePrompt(tickets, users, sprints));
+    runPrompt(triagePrompt(tickets, users, sprints), { label: 'Triage' });
   }
   function copyPlan() {
-    copyPrompt(sprintPlanPrompt(sprints, tickets, users));
+    runPrompt(sprintPlanPrompt(sprints, tickets, users), { label: 'Sprint plan' });
   }
+  function planSprint(sprint: Sprint) {
+    runPrompt(sprintBreakdownPrompt(sprint, tickets, users), {
+      cwd: sprint.worktree?.path,
+      label: 'Plan ' + sprint.name,
+    });
+  }
+  $: planningSprints = sprints.filter(s => s.status === 'planning' && !!s.goal && s.goal.trim().length > 0);
   function runItem(item: Item) {
     if (item.kind === 'draft_sprint') copyPlan();
     else dispatch('applyFilter', item.params || {});
@@ -93,11 +101,33 @@
 
   <div class="hero">
     <div class="hero-txt">
-      <div class="hero-t">Hand triage to Claude Code</div>
-      <div class="hero-s">Copies a full triage prompt (open tickets + tkxr MCP reminder). Paste into Claude Code — it'll use the tkxr MCP tools to inspect + fix.</div>
+      {#if $claudeConfig?.available}
+        <div class="hero-t">Run triage in Claude</div>
+        <div class="hero-s">Sends a full triage prompt (open tickets + tkxr MCP reminder) straight to the claude CLI. Live output streams into the run panel.</div>
+      {:else}
+        <div class="hero-t">Hand triage to Claude Code</div>
+        <div class="hero-s">Copies a full triage prompt (open tickets + tkxr MCP reminder). Paste into Claude Code — it'll use the tkxr MCP tools to inspect + fix.</div>
+      {/if}
     </div>
-    <button class="btn btn-primary" on:click={copyFullTriage}>Copy triage prompt</button>
+    <button class="btn btn-primary" on:click={copyFullTriage}>
+      {$claudeConfig?.available ? 'Run in Claude' : 'Copy triage prompt'}
+    </button>
   </div>
+
+  {#each planningSprints as s (s.id)}
+    <div class="card">
+      <div class="row1">
+        <Sparkles size={14} color="var(--ai)" />
+        <span class="t">Plan sprint "{s.name}" with Claude</span>
+      </div>
+      <div class="detail">Break the goal into child tickets (waves via <code>dependsOn</code>). Guardrails: won't touch existing tickets, capped at ~12 new tickets.</div>
+      <div class="row-actions">
+        <button class="btn" on:click={() => planSprint(s)}>
+          {$claudeConfig?.available ? 'Plan with Claude' : 'Copy plan prompt'}
+        </button>
+      </div>
+    </div>
+  {/each}
 
   {#each findings.items as it}
     <div class="card">
@@ -110,13 +140,15 @@
       {/if}
       <div class="row-actions">
         <button class="btn" on:click={() => runItem(it)}>
-          {it.kind === 'draft_sprint' ? 'Copy plan prompt' : 'Show me'}
+          {it.kind === 'draft_sprint'
+            ? ($claudeConfig?.available ? 'Run in Claude' : 'Copy plan prompt')
+            : 'Show me'}
         </button>
       </div>
     </div>
   {/each}
 
-  {#if findings.items.length === 0}
+  {#if findings.items.length === 0 && planningSprints.length === 0}
     <div class="empty">Nothing needs attention. 🎉</div>
   {/if}
 </div>
@@ -170,6 +202,12 @@
   .dot { width: 8px; height: 8px; border-radius: 3px; flex: none; }
   .t { font-size: 12.5px; font-weight: 600; color: var(--text); }
   .detail { font-size: 12px; color: var(--muted); }
+  .detail code {
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-size: 10.5px;
+  }
   .row-actions { display: flex; justify-content: flex-end; }
   .empty { color: var(--faint); font-size: 12.5px; padding: 20px; text-align: center; }
 </style>
