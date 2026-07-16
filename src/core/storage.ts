@@ -151,13 +151,45 @@ export class ProjectStorage {
     return sprint;
   }
 
-  async deleteSprint(sprintId: string): Promise<boolean> {
+  async deleteSprint(sprintId: string): Promise<{ ok: boolean; sweptTickets: Ticket[] }> {
     const sprints = await this.getSprints();
     const index = sprints.findIndex(s => s.id === sprintId);
-    if (index === -1) return false;
+    if (index === -1) return { ok: false, sweptTickets: [] };
     sprints.splice(index, 1);
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
-    return true;
+
+    // Sweep tickets that were attached to this sprint — leaving stale sprint refs
+    // makes them disappear from any sprint view but linger under "All tickets" with
+    // a broken chip. Clear the field in-place across the NDJSON chunks and return
+    // the updated tickets so callers can broadcast ticket_updated for each.
+    const sweptTickets: Ticket[] = [];
+    const chunkFiles = await this.getTicketChunkFiles();
+    for (const file of chunkFiles) {
+      const filePath = path.join(this.ticketsDir, file);
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      let touched = false;
+      const newLines = lines.map(line => {
+        const t = JSON.parse(line);
+        if (t.sprint === sprintId) {
+          touched = true;
+          const next = { ...t, sprint: undefined, updatedAt: new Date() };
+          delete next.sprint;
+          sweptTickets.push({
+            ...next,
+            createdAt: new Date(t.createdAt),
+            updatedAt: next.updatedAt,
+          });
+          return JSON.stringify(next);
+        }
+        return line;
+      });
+      if (touched) {
+        await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
+      }
+    }
+
+    return { ok: true, sweptTickets };
   }
 
   // Ticket CRUD (NDJSON)
@@ -342,7 +374,7 @@ export class ProjectStorage {
       case 'bugs':
         return this.deleteTicket(id);
       case 'sprints':
-        return this.deleteSprint(id);
+        return (await this.deleteSprint(id)).ok;
       case 'users':
         return this.deleteUser(id);
       case 'comments':

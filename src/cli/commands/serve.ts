@@ -372,13 +372,18 @@ export async function startServer(args: ServeArgs): Promise<void> {
   app.delete('/api/sprints/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const deleted = await storage.deleteEntity('sprints', id);
+      const { ok, sweptTickets } = await storage.deleteSprint(id);
 
-      if (!deleted) {
+      if (!ok) {
         return res.status(404).json({ error: 'Sprint not found' });
       }
 
-      res.json({ success: true });
+      broadcast(wss, { type: 'sprint_deleted', data: { id } });
+      for (const t of sweptTickets) {
+        broadcast(wss, { type: 'ticket_updated', data: t });
+      }
+
+      res.json({ success: true, sweptTicketIds: sweptTickets.map(t => t.id) });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete sprint' });
     }

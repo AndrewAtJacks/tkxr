@@ -671,17 +671,20 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'delete_sprint',
-    description: 'Delete a sprint by id. Tickets in the sprint keep their sprint field pointing to the deleted id — set them to another sprint first if needed.',
+    description: 'Delete a sprint by id. Any tickets attached to the sprint have their sprint field cleared and each is re-broadcast as ticket_updated so open web clients refresh.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
       required: ['id'],
     },
     handler: async ({ id }, { storage, broadcast }) => {
-      const ok = await storage.deleteSprint(id);
+      const { ok, sweptTickets } = await storage.deleteSprint(id);
       if (!ok) return errorResult(`Sprint "${id}" not found`);
       broadcast?.({ type: 'sprint_deleted', data: { id } });
-      return jsonResult({ id, deleted: true });
+      for (const t of sweptTickets) {
+        broadcast?.({ type: 'ticket_updated', data: t });
+      }
+      return jsonResult({ id, deleted: true, sweptTicketIds: sweptTickets.map(t => t.id) });
     },
   },
   {
