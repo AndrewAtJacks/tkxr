@@ -8,6 +8,11 @@ export type BroadcastEvent =
 export interface ToolContext {
   storage: ProjectStorage;
   broadcast?: (ev: BroadcastEvent) => void;
+  // Repo root cwd for git/worktree ops. The `serve` command chdir's into
+  // `dist/` at boot for static-asset resolution, so process.cwd() no longer
+  // points at the user's repo. Endpoints capture the original cwd at boot
+  // and pass it here so worktree/git commands still run against the repo.
+  repoCwd?: string;
 }
 
 export interface ToolResultContent {
@@ -792,13 +797,13 @@ export const TOOLS: ToolDef[] = [
       },
       required: ['ticketId'],
     },
-    handler: async ({ ticketId, path: p, branch, base }, { storage, broadcast }) => {
+    handler: async ({ ticketId, path: p, branch, base }, { storage, broadcast, repoCwd }) => {
       const found = await storage.findTicket(ticketId);
       if (!found) return errorResult(`Ticket "${ticketId}" not found`);
       if (found.ticket.worktree) {
         return errorResult(`Ticket already has a worktree at ${found.ticket.worktree.path}. Remove it first if you want a different one.`);
       }
-      if (!(await isGitRepo())) return errorResult('Not a git repository. Run this from inside a git repo.');
+      if (!(await isGitRepo(repoCwd))) return errorResult('Not a git repository. Run this from inside a git repo.');
 
       let effectiveBase = base;
       if (!effectiveBase && found.ticket.sprint) {
@@ -808,7 +813,7 @@ export const TOOLS: ToolDef[] = [
       }
 
       try {
-        const result = await createWorktree({ ticketId, path: p, branch, base: effectiveBase });
+        const result = await createWorktree({ ticketId, path: p, branch, base: effectiveBase, cwd: repoCwd });
         const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
         const updated = await storage.updateTicket(ticketId, { worktree: wt });
         if (!updated) return errorResult(`Ticket "${ticketId}" disappeared during update`);
@@ -832,16 +837,16 @@ export const TOOLS: ToolDef[] = [
       },
       required: ['sprintId'],
     },
-    handler: async ({ sprintId, path: p, branch, base }, { storage, broadcast }) => {
+    handler: async ({ sprintId, path: p, branch, base }, { storage, broadcast, repoCwd }) => {
       const sprints = await storage.getSprints();
       const sprint = sprints.find(s => s.id === sprintId);
       if (!sprint) return errorResult(`Sprint "${sprintId}" not found`);
       if (sprint.worktree) {
         return errorResult(`Sprint already has a worktree at ${sprint.worktree.path}. Remove it first if you want a different one.`);
       }
-      if (!(await isGitRepo())) return errorResult('Not a git repository.');
+      if (!(await isGitRepo(repoCwd))) return errorResult('Not a git repository.');
       try {
-        const result = await createSprintWorktree({ sprintId, path: p, branch, base });
+        const result = await createSprintWorktree({ sprintId, path: p, branch, base, cwd: repoCwd });
         const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
         const updated = await storage.updateSprint(sprintId, { worktree: wt });
         if (!updated) return errorResult(`Sprint "${sprintId}" disappeared during update`);
@@ -864,14 +869,14 @@ export const TOOLS: ToolDef[] = [
       },
       required: ['sprintId'],
     },
-    handler: async ({ sprintId, force, keepBranch }, { storage, broadcast }) => {
+    handler: async ({ sprintId, force, keepBranch }, { storage, broadcast, repoCwd }) => {
       const sprints = await storage.getSprints();
       const sprint = sprints.find(s => s.id === sprintId);
       if (!sprint) return errorResult(`Sprint "${sprintId}" not found`);
       const wt = sprint.worktree;
       if (!wt) return errorResult(`Sprint has no worktree.`);
       try {
-        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch });
+        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: repoCwd });
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : String(err));
       }
@@ -892,13 +897,13 @@ export const TOOLS: ToolDef[] = [
       },
       required: ['ticketId'],
     },
-    handler: async ({ ticketId, force, keepBranch }, { storage, broadcast }) => {
+    handler: async ({ ticketId, force, keepBranch }, { storage, broadcast, repoCwd }) => {
       const found = await storage.findTicket(ticketId);
       if (!found) return errorResult(`Ticket "${ticketId}" not found`);
       const wt = found.ticket.worktree;
       if (!wt) return errorResult(`Ticket has no worktree.`);
       try {
-        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch });
+        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: repoCwd });
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : String(err));
       }
@@ -911,10 +916,10 @@ export const TOOLS: ToolDef[] = [
     name: 'list_worktrees',
     description: 'List all git worktrees for the current repo (mirrors `git worktree list --porcelain`). Includes non-tkxr worktrees.',
     inputSchema: { type: 'object', properties: {} },
-    handler: async () => {
-      if (!(await isGitRepo())) return errorResult('Not a git repository.');
+    handler: async (_args, { repoCwd }) => {
+      if (!(await isGitRepo(repoCwd))) return errorResult('Not a git repository.');
       try {
-        const worktrees = await listWorktrees();
+        const worktrees = await listWorktrees(repoCwd);
         return jsonResult(worktrees);
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : String(err));

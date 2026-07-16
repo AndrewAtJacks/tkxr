@@ -79,6 +79,12 @@ export async function startServer(args: ServeArgs): Promise<void> {
     console.log(chalk.dim('gh CLI: not found on PATH (PR flow unavailable)'));
   }
 
+  // The chdir block below moves us into `dist/` for static asset resolution.
+  // Capture the cwd the user launched from FIRST — worktree/git endpoints need
+  // to run git commands against the user's repo, not the (possibly non-repo)
+  // installed-package `dist/` directory.
+  const originalCwd = process.cwd();
+
   // Ensure the process is running from the appropriate `dist` directory so relative
   // paths to `package.json` and the `web` assets resolve correctly.
   try {
@@ -159,11 +165,11 @@ export async function startServer(args: ServeArgs): Promise<void> {
   const claudeRuns = new Map<string, ClaudeRun>();
 
   async function resolveClaudeCwd(requested: string | undefined): Promise<string> {
-    const repoRoot = path.resolve(await getRepoRoot());
+    const repoRoot = path.resolve(await getRepoRoot(originalCwd));
     if (!requested) return repoRoot;
     const normalized = path.resolve(requested);
     if (normalized === repoRoot) return repoRoot;
-    const worktrees = await listWorktrees();
+    const worktrees = await listWorktrees(originalCwd);
     const allowed = new Set(worktrees.map(w => path.resolve(w.path)));
     allowed.add(repoRoot);
     if (!allowed.has(normalized)) {
@@ -836,6 +842,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
   const mcpCtx: ToolContext = {
     storage,
     broadcast: (ev) => broadcast(wss, { type: ev.type, data: ev.data }),
+    repoCwd: originalCwd,
   };
 
   function createMcpServer(): McpServer {
@@ -917,8 +924,8 @@ export async function startServer(args: ServeArgs): Promise<void> {
   // Web UI convenience; MCP tools cover the same ground for agents.
   app.get('/api/worktrees', async (req, res) => {
     try {
-      if (!(await isGitRepo())) return res.status(400).json({ error: 'Not a git repository' });
-      const worktrees = await listWorktrees();
+      if (!(await isGitRepo(originalCwd))) return res.status(400).json({ error: 'Not a git repository' });
+      const worktrees = await listWorktrees(originalCwd);
       res.json({ worktrees, isGitRepo: true });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to list worktrees' });
@@ -933,14 +940,14 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (found.ticket.worktree) {
         return res.status(409).json({ error: `Ticket already has a worktree at ${found.ticket.worktree.path}` });
       }
-      if (!(await isGitRepo())) return res.status(400).json({ error: 'Not a git repository' });
+      if (!(await isGitRepo(originalCwd))) return res.status(400).json({ error: 'Not a git repository' });
       const { path: p, branch, base } = req.body || {};
       let effectiveBase = base;
       if (!effectiveBase && found.ticket.sprint) {
         const sprint = (await storage.getSprints()).find(s => s.id === found.ticket.sprint);
         if (sprint?.worktree) effectiveBase = sprint.worktree.branch;
       }
-      const result = await createWorktree({ ticketId: id, path: p, branch, base: effectiveBase });
+      const result = await createWorktree({ ticketId: id, path: p, branch, base: effectiveBase, cwd: originalCwd });
       const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
       const updated = await storage.updateTicket(id, { worktree: wt });
       if (updated) broadcast(wss, { type: 'ticket_updated', data: updated });
@@ -958,9 +965,9 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (sprint.worktree) {
         return res.status(409).json({ error: `Sprint already has a worktree at ${sprint.worktree.path}` });
       }
-      if (!(await isGitRepo())) return res.status(400).json({ error: 'Not a git repository' });
+      if (!(await isGitRepo(originalCwd))) return res.status(400).json({ error: 'Not a git repository' });
       const { path: p, branch, base } = req.body || {};
-      const result = await createSprintWorktree({ sprintId: id, path: p, branch, base });
+      const result = await createSprintWorktree({ sprintId: id, path: p, branch, base, cwd: originalCwd });
       const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
       const updated = await storage.updateSprint(id, { worktree: wt });
       if (updated) broadcast(wss, { type: 'sprint_updated', data: updated });
@@ -979,7 +986,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (!wt) return res.status(404).json({ error: 'Sprint has no worktree' });
       const force = req.query.force === 'true' || req.body?.force === true;
       const keepBranch = req.query.keepBranch === 'true' || req.body?.keepBranch === true;
-      await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch });
+      await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
       const updated = await storage.updateSprint(id, { worktree: null });
       if (updated) broadcast(wss, { type: 'sprint_updated', data: updated });
       res.json({ sprint: updated, removed: wt });
@@ -997,7 +1004,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (!wt) return res.status(404).json({ error: 'Ticket has no worktree' });
       const force = req.query.force === 'true' || req.body?.force === true;
       const keepBranch = req.query.keepBranch === 'true' || req.body?.keepBranch === true;
-      await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch });
+      await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
       const updated = await storage.updateTicket(id, { worktree: null });
       if (updated) broadcast(wss, { type: 'ticket_updated', data: updated });
       res.json({ ticket: updated, removed: wt });
@@ -1013,7 +1020,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
 
   app.get('/api/git/remote', async (req, res) => {
     try {
-      const info = await getRemoteInfo();
+      const info = await getRemoteInfo(originalCwd);
       res.json({ remote: info });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to read remote' });
@@ -1036,7 +1043,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
         if (sprint?.worktree) base = sprint.worktree.branch;
       }
 
-      const remote = await getRemoteInfo();
+      const remote = await getRemoteInfo(originalCwd);
       const insights = await getBranchInsights({
         cwd: wt.path,
         branch: wt.branch,
@@ -1057,7 +1064,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const wt = sprint.worktree;
       if (!wt) return res.status(409).json({ error: 'Sprint has no worktree' });
 
-      const remote = await getRemoteInfo();
+      const remote = await getRemoteInfo(originalCwd);
       const insights = await getBranchInsights({
         cwd: wt.path,
         branch: wt.branch,
