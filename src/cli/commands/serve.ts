@@ -18,7 +18,8 @@ import { createStorage, type TicketQueryOptions, type TicketSortBy } from '../..
 import { notifier } from '../../core/notifier.js';
 import { SERVER_INSTRUCTIONS, TOOL_MAP, TOOLS, type ToolContext } from '../../mcp/tools.js';
 import { createSprintWorktree, createWorktree, getRepoRoot, isGitRepo, listWorktrees, removeWorktree } from '../../core/worktree.js';
-import { getBranchInsights, getRemoteInfo } from '../../core/gitInsights.js';
+import { getBranchInsights, getRemoteInfo, detectDefaultBase } from '../../core/gitInsights.js';
+import { discoverGh, pushAndOpenPr, PrFlowError, type GhConfig } from '../../core/prFlow.js';
 import {
   discoverClaude,
   killWithGrace,
@@ -62,6 +63,20 @@ export async function startServer(args: ServeArgs): Promise<void> {
     console.log(chalk.dim(`claude CLI: ${claudeConfig.bin}${claudeConfig.version ? ` (v${claudeConfig.version})` : ''} · permission-mode=${claudeConfig.permissionMode}`));
   } else {
     console.log(chalk.dim('claude CLI: not found on PATH (clipboard fallback active)'));
+  }
+
+  // Probe `gh` once at boot — used by the "Push + open PR" flow. Cached on
+  // app.locals.gh so the endpoints don't reshoot per request.
+  const ghConfig: GhConfig = await discoverGh();
+  app.locals.gh = ghConfig;
+  if (ghConfig.disabled) {
+    console.log(chalk.dim('gh CLI: disabled via TKXR_GH_DISABLED (PR flow unavailable)'));
+  } else if (ghConfig.available && ghConfig.authenticated) {
+    console.log(chalk.dim(`gh CLI: ready${ghConfig.version ? ` (v${ghConfig.version})` : ''}`));
+  } else if (ghConfig.available) {
+    console.log(chalk.dim('gh CLI: found but not authenticated — run `gh auth login` to enable PR flow'));
+  } else {
+    console.log(chalk.dim('gh CLI: not found on PATH (PR flow unavailable)'));
   }
 
   // Ensure the process is running from the appropriate `dist` directory so relative
@@ -330,12 +345,19 @@ export async function startServer(args: ServeArgs): Promise<void> {
       // docs/claude-cli-integration.md). Web store `claudeConfig` reads this
       // to decide between "Run in Claude" and the existing "Copy prompt" flow.
       const cached: ClaudeConfig = app.locals.claude ?? { available: false, bin: '' };
+      const gh: GhConfig = app.locals.gh ?? { available: false };
       res.json({
         host: 'localhost',
         port: port,
         url: `http://localhost:${port}`,
         version: version,
         claude: toPublicConfig(cached),
+        gh: {
+          available: gh.available,
+          authenticated: gh.authenticated ?? false,
+          ...(gh.version ? { version: gh.version } : {}),
+          ...(gh.disabled ? { disabled: true } : {}),
+        },
       });
     } catch (error) {
       res.status(500).json({ error: 'Failed to get server config' });
@@ -1044,6 +1066,109 @@ export async function startServer(args: ServeArgs): Promise<void> {
       res.json({ insights, remote });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to read branch insights' });
+    }
+  });
+
+  // -------------------- PR flow (push + create/lookup) --------------------
+  // Each sprint owns a branch; tickets PR into the sprint branch, the sprint
+  // PRs into the repo default (main). Only user-triggered — no automatic
+  // pushes, no automatic PR creation. See core/prFlow.ts for the flow.
+
+  function prErrorStatus(code: PrFlowError['code']): number {
+    switch (code) {
+      case 'gh_missing': return 503;
+      case 'gh_not_authenticated': return 503;
+      case 'no_remote': return 409;
+      case 'base_not_on_remote': return 409;
+      case 'push_failed': return 502;
+      case 'pr_lookup_failed': return 502;
+      case 'pr_create_failed': return 502;
+      default: return 500;
+    }
+  }
+
+  app.post('/api/tickets/:id/pr', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const found = await storage.findTicket(id);
+      if (!found) return res.status(404).json({ error: { code: 'not_found', message: 'Ticket not found' } });
+      const wt = found.ticket.worktree;
+      if (!wt) return res.status(409).json({ error: { code: 'no_worktree', message: 'Ticket has no worktree' } });
+
+      // Base = sprint branch if the ticket is in a sprint with its own worktree,
+      // otherwise the repo's default branch (usually main). This is what makes
+      // "each sprint owns a working branch" actually work at PR time.
+      let base: string | undefined;
+      if (found.ticket.sprint) {
+        const sprint = (await storage.getSprints()).find(s => s.id === found.ticket.sprint);
+        if (sprint?.worktree) base = sprint.worktree.branch;
+      }
+      if (!base) base = await detectDefaultBase(wt.path);
+
+      const title = `${found.ticket.type === 'bug' ? 'fix' : 'feat'}: ${found.ticket.title} (${id})`;
+      const bodyParts: string[] = [];
+      if (found.ticket.description && found.ticket.description.trim()) {
+        bodyParts.push(found.ticket.description.trim());
+      }
+      bodyParts.push('', `Ticket: \`${id}\``);
+      const body = bodyParts.join('\n');
+
+      const gh: GhConfig = app.locals.gh ?? { available: false };
+      const result = await pushAndOpenPr(
+        { cwd: wt.path, head: wt.branch, base, title, body },
+        gh,
+      );
+      res.json(result);
+    } catch (error) {
+      if (error instanceof PrFlowError) {
+        return res.status(prErrorStatus(error.code)).json({
+          error: { code: error.code, message: error.message, detail: error.detail },
+        });
+      }
+      res.status(500).json({ error: { code: 'unknown', message: error instanceof Error ? error.message : String(error) } });
+    }
+  });
+
+  app.post('/api/sprints/:id/pr', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const sprint = (await storage.getSprints()).find(s => s.id === id);
+      if (!sprint) return res.status(404).json({ error: { code: 'not_found', message: 'Sprint not found' } });
+      const wt = sprint.worktree;
+      if (!wt) return res.status(409).json({ error: { code: 'no_worktree', message: 'Sprint has no worktree' } });
+
+      // Sprints PR into the repo's default branch — main/master/whatever
+      // `origin/HEAD` points at.
+      const base = await detectDefaultBase(wt.path);
+
+      const scopedTickets = (await storage.getAllTickets()).filter(t => t.sprint === id);
+      const ticketList = scopedTickets.length > 0
+        ? scopedTickets.map(t => `- \`${t.id}\` (${t.status}) — ${t.title}`).join('\n')
+        : '_(no tickets attached)_';
+
+      const title = `Sprint: ${sprint.name} (${id})`;
+      const body = [
+        sprint.goal?.trim() || '_(no goal set)_',
+        '',
+        `Sprint: \`${id}\``,
+        '',
+        `## Tickets`,
+        ticketList,
+      ].join('\n');
+
+      const gh: GhConfig = app.locals.gh ?? { available: false };
+      const result = await pushAndOpenPr(
+        { cwd: wt.path, head: wt.branch, base, title, body },
+        gh,
+      );
+      res.json(result);
+    } catch (error) {
+      if (error instanceof PrFlowError) {
+        return res.status(prErrorStatus(error.code)).json({
+          error: { code: error.code, message: error.message, detail: error.detail },
+        });
+      }
+      res.status(500).json({ error: { code: 'unknown', message: error instanceof Error ? error.message : String(error) } });
     }
   });
 

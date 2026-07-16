@@ -362,3 +362,13 @@ export interface ClaudeConfig {
   permissionMode?: ClaudePermissionMode;
 }
 export const claudeConfig = writable<ClaudeConfig | null>(null);
+
+// `gh` CLI capability, populated from `GET /api/config.gh` on boot. Consumed by
+// the BranchInsights component to gate the "Push + open PR" button.
+export interface GhConfig {
+  available: boolean;
+  authenticated: boolean;
+  version?: string;
+  disabled?: boolean;
+}
+export const ghConfig = writable<GhConfig | null>(null);

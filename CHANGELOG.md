@@ -53,10 +53,55 @@
   double-counting on the next fetch; updates mutate in place; deletes
   drop the row from every loaded page.
 
+### Fixed
+- **Claude CLI runs no longer stall on approval prompts.** The headless
+  runner now passes `--permission-mode <mode>` (defaulting to
+  `bypassPermissions`) so tool-use never waits for an interactive
+  approval that the web UI can't answer. New `TKXR_CLAUDE_PERMISSION_MODE`
+  env var picks the mode; `plan` is refused (no non-interactive escape).
+  `TKXR_CLAUDE_ARGS` is scrubbed of `--permission-mode plan` at both
+  discovery and spawn time. Every prompt now leads with a headless-mode
+  execution directive telling the model not to enter plan mode or ask
+  for approval. ClaudeRunPanel detects permission-request frames and
+  renders an explicit banner instead of stalling silently (bug-I30c9l0_).
+
+### Added
+- **"Commit with Claude" on sprint panel.** Analogue to the ticket-level
+  action — runs a prompt scoped to the sprint worktree that stages any
+  uncommitted work and lands a Conventional Commit. Handles three cases:
+  integration commits tagged with the sprint id, ticket-specific commits
+  tagged with the ticket id, and `chore(merge): <ticket-id>` merges for
+  unmerged ticket branches.
+- **BranchInsights component** on ticket + sprint panels. Read-only
+  branch state so commits landing in per-ticket/per-sprint worktrees
+  are no longer invisible from the primary VSCode window. Shows base,
+  HEAD, commits ahead of base (with short sha + relative time), diff
+  shortstat, dirty flag, `origin/<branch>` ahead/behind, and
+  GitHub/GitLab/Bitbucket **Open branch** + **Compare vs base** links.
+  Auto-refreshes on `claude_run_exit` WS events.
+- **"Push + open PR" primary action.** Shells out to `gh` server-side —
+  ticket PRs target the sprint branch (its natural base), sprint PRs
+  target the repo default. Draft PRs by default; existing OPEN PRs on
+  the same head are reused so re-clicks push new commits without
+  duplicating. Structured error codes (`gh_missing`,
+  `gh_not_authenticated`, `base_not_on_remote`, `push_failed`,
+  `pr_lookup_failed`, `pr_create_failed`) map to HTTP status so the UI
+  can render actionable messages.
+- **`gh` capability probed at server boot**, surfaced via `/api/config.gh`
+  so the UI can gate the PR button on availability + auth. Env var
+  `TKXR_GH_DISABLED=1` opts out.
+- **REST:** `GET /api/git/remote`, `GET /api/tickets/:id/git`,
+  `GET /api/sprints/:id/git`, `POST /api/tickets/:id/pr`,
+  `POST /api/sprints/:id/pr`.
+
 ### Docs
 - README: new **Search + infinite scroll** subsection under Web UI, new
   **Paged tickets** and **Ticket summary** subsections under REST API,
   and `/api/tickets/summary` added to the endpoint list.
+- README + `docs/claude-cli-integration.md`: document
+  `TKXR_CLAUDE_PERMISSION_MODE`, and supersede the old
+  "do not add --dangerously-skip-permissions" guidance with the new
+  permission-mode-first policy.
 
 ## [2.0.2] - 2026-07-16
 

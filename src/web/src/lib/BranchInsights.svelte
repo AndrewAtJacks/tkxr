@@ -6,6 +6,7 @@
 
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { copyToClipboard, showToast } from './clipboard';
+  import { ghConfig } from './stores';
 
   export let scope: 'ticket' | 'sprint';
   export let id: string;
@@ -91,16 +92,43 @@
   // Reload when id changes (e.g. user switches panel to another ticket).
   $: if (id) load();
 
-  async function copyMergeCommand() {
-    if (!insights) return;
-    // The merge should be run in the *base's* worktree — for a ticket, that's
-    // the sprint worktree (if any) or the main checkout; for a sprint, it's
-    // main. We only know the ticket/sprint worktree here, so give the user
-    // the fully-qualified `git -C ...` form and the branch names — they know
-    // where the base lives.
-    const cmd = `git merge --no-ff ${insights.branch} -m "chore(merge): ${insights.branch}"`;
-    const ok = await copyToClipboard(cmd);
-    showToast(ok ? 'Merge command copied' : 'Copy failed', ok ? 'success' : 'error');
+  // Push + open PR state. `prResult` sticks around after success so the user
+  // can copy/click the URL again without re-hitting the endpoint.
+  let prBusy = false;
+  let prError: string | null = null;
+  let prResult: { url: string; created: boolean; pushed: boolean; base: string; head: string } | null = null;
+
+  async function pushAndOpenPr() {
+    if (!insights || prBusy) return;
+    prBusy = true;
+    prError = null;
+    try {
+      const path = scope === 'ticket' ? `/api/tickets/${id}/pr` : `/api/sprints/${id}/pr`;
+      const res = await fetch(path, { method: 'POST' });
+      const body = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        const msg = body?.error?.message || `HTTP ${res.status}`;
+        prError = msg;
+        showToast(msg, 'error', 5000);
+        return;
+      }
+      prResult = body;
+      // Refresh insights so the "unpushed" badge disappears immediately.
+      await load();
+      if (body.created) {
+        showToast('PR opened', 'success');
+      } else {
+        showToast(body.pushed ? 'Pushed to existing PR' : 'PR already open', 'info');
+      }
+      // Open in a new tab so the user doesn't lose their tkxr context.
+      try { window.open(body.url, '_blank', 'noopener'); } catch { /* popup blocked */ }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      prError = msg;
+      showToast(msg, 'error', 5000);
+    } finally {
+      prBusy = false;
+    }
   }
 
   async function copyBranchName() {
@@ -199,11 +227,36 @@
       {/if}
       <button class="btn" on:click={copyBranchName}>Copy branch name</button>
       {#if !insights.empty}
-        <button class="btn" on:click={copyMergeCommand} title="Paste this in the base worktree ({insights.base})">
-          Copy merge command
-        </button>
+        {#if $ghConfig?.available && $ghConfig?.authenticated}
+          <button
+            class="btn btn-primary"
+            on:click={pushAndOpenPr}
+            disabled={prBusy}
+            title="Pushes {insights.branch} to origin then opens a draft PR against {insights.base}"
+          >
+            {prBusy ? 'Working…' : prResult ? 'Re-open PR' : 'Push + open PR'}
+          </button>
+        {:else if $ghConfig?.available}
+          <button class="btn" disabled title="gh CLI found but not authenticated — run `gh auth login` on the server">
+            gh not authenticated
+          </button>
+        {:else}
+          <button class="btn" disabled title="gh CLI not on server PATH">
+            gh unavailable
+          </button>
+        {/if}
       {/if}
     </div>
+
+    {#if prResult}
+      <div class="bi-pr">
+        <span class="pr-label">PR:</span>
+        <a class="pr-url" href={prResult.url} target="_blank" rel="noopener">{prResult.url}</a>
+        <span class="pr-meta">→ {prResult.base}</span>
+      </div>
+    {:else if prError}
+      <div class="bi-pr err">{prError}</div>
+    {/if}
 
     <div class="bi-foot">
       <span class="mono foot-path" title={worktreePath}>{worktreePath}</span>
@@ -323,7 +376,41 @@
     display: inline-flex;
     align-items: center;
   }
-  .btn:hover { color: var(--text); border-color: var(--text2); }
+  .btn:hover:not(:disabled) { color: var(--text); border-color: var(--text2); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary {
+    background: var(--accent, #6ea8ff);
+    color: #0b1220;
+    border-color: transparent;
+    font-weight: 600;
+  }
+  .btn-primary:hover:not(:disabled) {
+    color: #0b1220;
+    filter: brightness(1.08);
+    border-color: transparent;
+  }
+
+  .bi-pr {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 11px;
+    flex-wrap: wrap;
+  }
+  .bi-pr.err { color: #ff6b6b; }
+  .pr-label { color: var(--faint); }
+  .pr-url {
+    color: var(--accent, #6ea8ff);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .pr-url:hover { text-decoration: underline; }
+  .pr-meta { color: var(--faint); font-size: 10.5px; }
 
   .bi-foot {
     border-top: 1px solid var(--border-subtle);

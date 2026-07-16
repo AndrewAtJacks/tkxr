@@ -2,7 +2,7 @@
   import { browser } from '$app/environment';
   import { onDestroy, onMount } from 'svelte';
   import type { PagedTicketQuery, Sprint, Ticket, TicketSortBy, User } from '../lib/stores';
-  import { pagedTickets, sprintStore, ticketStore, userStore, claudeConfig } from '../lib/stores';
+  import { pagedTickets, sprintStore, ticketStore, userStore, claudeConfig, ghConfig } from '../lib/stores';
   import { activeRunId } from '../lib/claudeRun';
 
   // Local aliases so Svelte's `$store` auto-subscription can reach into the
@@ -143,6 +143,10 @@
         // `copyPrompt` (clipboard.ts) from first paint. Docs §5.
         if (j.claude) claudeConfig.set(j.claude);
         else claudeConfig.set({ available: false, bin: '' });
+        // Populate the gh CLI capability store so BranchInsights can gate
+        // the "Push + open PR" button on availability + auth.
+        if (j.gh) ghConfig.set(j.gh);
+        else ghConfig.set({ available: false, authenticated: false });
       }
       if (ccRes.ok) {
         commentCounts = await ccRes.json();
