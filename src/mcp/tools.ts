@@ -750,7 +750,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'delete_user',
-    description: 'Delete a user. Tickets assigned to them keep the stale assignee field — reassign first if needed.',
+    description: 'Delete a user. Any tickets assigned to them are automatically unassigned (ticket.assignee cleared) and each unassigned ticket broadcasts a ticket_updated event.',
     inputSchema: {
       type: 'object',
       properties: { ref: { type: 'string' } },
@@ -759,10 +759,13 @@ export const TOOLS: ToolDef[] = [
     handler: async ({ ref }, { storage, broadcast }) => {
       const uid = await resolveUserId(storage, ref);
       if (!uid) return errorResult(`User "${ref}" not found`);
-      const ok = await storage.deleteUser(uid);
-      if (!ok) return errorResult(`Failed to delete user "${uid}"`);
+      const { deleted, unassignedTickets } = await storage.deleteUser(uid);
+      if (!deleted) return errorResult(`Failed to delete user "${uid}"`);
       broadcast?.({ type: 'user_deleted', data: { id: uid } });
-      return jsonResult({ id: uid, deleted: true });
+      for (const t of unassignedTickets) {
+        broadcast?.({ type: 'ticket_updated', data: t });
+      }
+      return jsonResult({ id: uid, deleted: true, unassignedTicketIds: unassignedTickets.map(t => t.id) });
     },
   },
 

@@ -55,8 +55,18 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
       console.log(chalk.dim(`  Deleted ${comments.length} associated comment(s)...`));
     }
     
-    const deleted = await storage.deleteEntity(entityType, id);
-    
+    // Users get a dedicated path so we can also fan-out ticket_updated notifications
+    // for every ticket that was auto-unassigned by the delete.
+    let deleted = false;
+    let unassignedTickets: Awaited<ReturnType<typeof storage.deleteUser>>['unassignedTickets'] = [];
+    if (entityType === 'users') {
+      const r = await storage.deleteUser(id);
+      deleted = r.deleted;
+      unassignedTickets = r.unassignedTickets;
+    } else {
+      deleted = await storage.deleteEntity(entityType, id);
+    }
+
     if (deleted) {
       if (entityType === 'tasks' || entityType === 'bugs') {
         await notifier.notifyTicketDeleted(id);
@@ -64,6 +74,12 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
         await notifier.notifySprintDeleted(id);
       } else if (entityType === 'users') {
         await notifier.notifyUserDeleted(id);
+        for (const t of unassignedTickets) {
+          await notifier.notifyTicketUpdated(t);
+        }
+        if (unassignedTickets.length) {
+          console.log(chalk.dim(`  Unassigned ${unassignedTickets.length} ticket(s): ${unassignedTickets.map(t => t.id).join(', ')}`));
+        }
       } else if (entityType === 'comments') {
         // Comment delete needs ticketId — we don't have it in this generic path.
         // The dedicated `comments --delete` command handles notification with ticketId.

@@ -62,13 +62,43 @@ export class ProjectStorage {
     }
   }
 
-  async deleteUser(userId: string): Promise<boolean> {
+  async deleteUser(userId: string): Promise<{ deleted: boolean; unassignedTickets: Ticket[] }> {
     const users = await this.getUsers();
     const index = users.findIndex(u => u.id === userId);
-    if (index === -1) return false;
+    if (index === -1) return { deleted: false, unassignedTickets: [] };
     users.splice(index, 1);
     await fs.writeFile(this.usersPath, JSON.stringify(users, null, 2), 'utf8');
-    return true;
+
+    // Null out ticket.assignee for every ticket that pointed at the deleted user.
+    // Otherwise the board keeps rendering '?' avatars and the filter-by-user UI
+    // still lists a dead id.
+    const unassignedTickets: Ticket[] = [];
+    const chunkFiles = await this.getTicketChunkFiles();
+    for (const file of chunkFiles) {
+      const filePath = path.join(this.ticketsDir, file);
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      let touched = false;
+      const newLines = lines.map(line => {
+        const t = JSON.parse(line);
+        if (t.assignee === userId) {
+          touched = true;
+          const next = { ...t, assignee: undefined, updatedAt: new Date() };
+          unassignedTickets.push({
+            ...next,
+            createdAt: new Date(next.createdAt),
+            updatedAt: new Date(next.updatedAt),
+          });
+          return JSON.stringify(next);
+        }
+        return line;
+      });
+      if (touched) {
+        await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
+      }
+    }
+
+    return { deleted: true, unassignedTickets };
   }
 
   async updateUser(id: string, updates: Partial<Pick<User, 'username' | 'displayName' | 'email' | 'color'>>): Promise<User | null> {
@@ -405,7 +435,7 @@ export class ProjectStorage {
       case 'sprints':
         return (await this.deleteSprint(id)).ok;
       case 'users':
-        return this.deleteUser(id);
+        return (await this.deleteUser(id)).deleted;
       case 'comments':
         return this.deleteComment(id);
       default:

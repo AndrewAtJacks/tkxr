@@ -274,13 +274,18 @@ export async function startServer(args: ServeArgs): Promise<void> {
   app.delete('/api/users/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const deleted = await storage.deleteEntity('users', id);
+      const { deleted, unassignedTickets } = await storage.deleteUser(id);
 
       if (!deleted) {
         return res.status(404).json({ error: 'User not found' });
       }
 
-      res.json({ success: true });
+      broadcast(wss, { type: 'user_deleted', data: { id } });
+      for (const t of unassignedTickets) {
+        broadcast(wss, { type: 'ticket_updated', data: t });
+      }
+
+      res.json({ success: true, unassignedTicketIds: unassignedTickets.map(t => t.id) });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete user' });
     }

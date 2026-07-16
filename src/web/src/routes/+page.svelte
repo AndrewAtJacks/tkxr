@@ -59,7 +59,8 @@
   }
 
   // If the selected sprint/user disappears (deleted from another client or CLI),
-  // fall back to 'all' so the board doesn't silently go empty.
+  // fall back to 'all' so the board doesn't silently go empty. Also close any
+  // open panel targeting the now-deleted entity so we don't render stale state.
   $: if (activeSprint !== 'all' && activeSprint !== 'none'
       && $sprintStore.length > 0
       && !($sprintStore as Sprint[]).some(s => s.id === activeSprint)) {
@@ -69,6 +70,18 @@
       && $userStore.length > 0
       && !($userStore as User[]).some(u => u.id === activeUser)) {
     activeUser = 'all';
+  }
+  $: if (selectedUserId !== null
+      && ($userStore as User[]).length > 0
+      && !($userStore as User[]).some(u => u.id === selectedUserId)) {
+    selectedUserId = null;
+    if (panel === 'user') panel = null;
+  }
+  $: if (selectedSprintId !== null
+      && ($sprintStore as Sprint[]).length > 0
+      && !($sprintStore as Sprint[]).some(s => s.id === selectedSprintId)) {
+    selectedSprintId = null;
+    if (panel === 'sprint') panel = null;
   }
 
   onMount(() => {
