@@ -275,6 +275,11 @@ export class ProjectStorage {
   }
 
   async getComments(ticketId: string): Promise<TicketComment[]> {
+    const all = await this.getAllComments();
+    return all.filter(c => c.ticketId === ticketId);
+  }
+
+  async getAllComments(): Promise<TicketComment[]> {
     const chunkFiles = await this.getCommentChunkFiles();
     let comments: TicketComment[] = [];
     for (const file of chunkFiles) {
@@ -289,7 +294,7 @@ export class ProjectStorage {
         };
       }));
     }
-    return comments.filter(c => c.ticketId === ticketId);
+    return comments;
   }
 
   // Find ticket by ID

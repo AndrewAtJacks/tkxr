@@ -272,12 +272,21 @@ export const TOOLS: ToolDef[] = [
       const q = String(query || '').toLowerCase().trim();
       if (!q) return errorResult('query is required');
       const tickets = await storage.getAllTickets();
+      // Read every comment once, then group by ticketId. Previously this loop
+      // called storage.getComments(t.id) per ticket — each call re-scanned every
+      // NDJSON chunk on disk (classic N+1). Grouping upfront collapses N disk
+      // scans into 1.
+      const allComments = await storage.getAllComments();
+      const commentsByTicket = new Map<string, string>();
+      for (const c of allComments) {
+        const prev = commentsByTicket.get(c.ticketId);
+        commentsByTicket.set(c.ticketId, prev ? `${prev} ${c.content}` : c.content);
+      }
       const results: { ticket: Ticket; score: number; snippet: string }[] = [];
       for (const t of tickets) {
         if (!includeDone && t.status === 'done') continue;
         const hay = `${t.title} ${t.description || ''}`.toLowerCase();
-        const comments = await storage.getComments(t.id);
-        const cText = comments.map(c => c.content).join(' ').toLowerCase();
+        const cText = (commentsByTicket.get(t.id) || '').toLowerCase();
         const inTitle = (t.title.toLowerCase().match(new RegExp(escapeRe(q), 'g')) || []).length;
         const inDesc = (t.description || '').toLowerCase().split(q).length - 1;
         const inComments = cText.split(q).length - 1;
