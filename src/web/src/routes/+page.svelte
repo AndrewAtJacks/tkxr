@@ -3,6 +3,7 @@
   import { onDestroy, onMount } from 'svelte';
   import type { Sprint, Ticket, User } from '../lib/stores';
   import { sprintStore, ticketStore, userStore, claudeConfig } from '../lib/stores';
+  import { activeRunId } from '../lib/claudeRun';
   import { normalizeTicket, PRIORITY_ORDER } from '../lib/util';
 
   import Sidebar from '../lib/Sidebar.svelte';
@@ -15,6 +16,7 @@
   import SprintPanel from '../lib/SprintPanel.svelte';
   import UserPanel from '../lib/UserPanel.svelte';
   import TriagePanel from '../lib/TriagePanel.svelte';
+  import ClaudeRunPanel from '../lib/ClaudeRunPanel.svelte';
   import CommandPalette from '../lib/CommandPalette.svelte';
   import Toaster from '../lib/Toaster.svelte';
 
@@ -421,6 +423,17 @@
       }}
     />
   {/if}
+</WorkspacePanel>
+
+<!--
+  Claude run panel — separate from the ticket/sprint/user/triage panel above.
+  Opened automatically by `runPrompt` (claudeRun.ts) on the first successful
+  run, and stays open until the user closes it via the header X. Downstream
+  panels (TicketPanel/SprintPanel/TriagePanel — tas-*) trigger runs via the
+  shared helper; they don't need to know this panel exists.
+-->
+<WorkspacePanel open={$activeRunId !== null} on:close={() => activeRunId.set(null)}>
+  <ClaudeRunPanel on:close={() => activeRunId.set(null)} />
 </WorkspacePanel>
 
 <Toaster />
