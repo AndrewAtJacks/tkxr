@@ -11,6 +11,14 @@
   ],
   "author": "Andrew Hein",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheLeggestOne/tkxr.git"
+  },
+  "homepage": "https://github.com/TheLeggestOne/tkxr#readme",
+  "bugs": {
+    "url": "https://github.com/TheLeggestOne/tkxr/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
