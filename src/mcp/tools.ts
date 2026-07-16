@@ -106,14 +106,20 @@ changes live. You do not need to call anything to trigger this.
   \`active\` when the team starts working.
 
 ## Dependencies
-Tickets can declare inter-ticket blockers via \`dependsOn: string[]\`. When you
-call \`get_ticket\`, the response includes a resolved \`dependencies\` array +
-a \`blockedBy\` array (unmet, non-done deps). Rules of thumb:
+Tickets can declare inter-ticket blockers via \`dependsOn: string[]\`. Deps are
+surfaced in every read tool:
+- \`list_tickets\` — each row includes \`dependsOn\` (normalized to \`[]\`) and
+  \`blockedBy\` (unmet non-done or missing deps). One call is enough to build a
+  full dep graph across a sprint.
+- \`get_ticket\` — richer: \`dependencies\` array carries resolved title/status
+  per dep (or \`{ missing: true }\`) plus the same \`blockedBy\`.
+
+Rules of thumb:
 - Before starting work: if \`blockedBy\` is non-empty, do not proceed. Set the
   ticket \`status: "blocked"\` + \`add_comment\` naming what it's waiting on.
 - Orchestrators must topological-sort children by \`dependsOn\` before fanning
-  out: only tickets whose deps are all \`done\` (or missing) are safe to
-  parallel-execute in the first wave.
+  out: only tickets whose \`blockedBy\` is empty are safe to parallel-execute in
+  the first wave. Fan out later waves as earlier ones move to \`done\`.
 - Set/edit deps via \`edit_ticket\` (\`dependsOn\`, \`addDependencies\`,
   \`removeDependencies\`, \`clearDependencies\`) or \`create_ticket\` (\`dependsOn\`).
 - The system does not enforce acyclicity — orchestrators should detect cycles
@@ -146,7 +152,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'list_tickets',
-    description: 'List tickets as an array of ticket objects (no comments). Supports filters and sorting. Use get_ticket for full detail with description and comments.',
+    description: 'List tickets as an array of ticket objects (no comments). Each row includes normalized dependsOn + computed blockedBy (unmet non-done deps) so orchestrators can dep-plan in a single call. Supports filters and sorting. Use get_ticket for full detail with description and comments.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -164,6 +170,7 @@ export const TOOLS: ToolDef[] = [
     handler: async (args, { storage }) => {
       let tickets = await storage.getAllTickets();
       const sprints = await storage.getSprints();
+      const statusById = new Map(tickets.map(t => [t.id, t.status]));
 
       let sprintIdFilter: string | null = null;
       if (args.sprintName) {
@@ -209,7 +216,16 @@ export const TOOLS: ToolDef[] = [
       }
 
       const limit = args.limit ?? 200;
-      return jsonResult({ count: tickets.length, tickets: tickets.slice(0, limit) });
+      const sliced = tickets.slice(0, limit);
+      const enriched = sliced.map(t => {
+        const dependsOn = t.dependsOn || [];
+        const blockedBy = dependsOn.filter(depId => {
+          const s = statusById.get(depId);
+          return s === undefined || s !== 'done';
+        });
+        return { ...t, dependsOn, blockedBy };
+      });
+      return jsonResult({ count: tickets.length, tickets: enriched });
     },
   },
   {
