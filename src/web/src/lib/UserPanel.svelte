@@ -1,12 +1,19 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import type { Ticket, User } from './stores';
-  import { avatarColorFor, AVATAR_PALETTE, initials, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
+  import { avatarColorFor, AVATAR_PALETTE, initials, normalizeTicket, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
+  import { onTicketEvent } from './ticketEvents';
   import X from './icons/X.svelte';
 
   export let user: User | null = null;
   export let isCreate = false;
+  // Legacy prop retained for backwards compat; assigned tickets are now
+  // fetched directly via `GET /api/tickets?assignee=<id>` so the panel is
+  // correct once the main store is paged (see tas-z-8q_Ljc).
   export let tickets: Ticket[] = [];
+  // Keep the prop referenced so svelte-check doesn't flag it as unused; the
+  // parent still binds it during the concurrent tas-RYc3-yIM refactor.
+  $: void tickets;
 
   const dispatch = createEventDispatcher();
 
@@ -20,8 +27,39 @@
       };
   let saveTimer: number | null = null;
 
-  $: assigned = user ? tickets.filter(t => t.assignee === user!.id) : [];
+  // Dedicated assignee slice — fetched on mount and refetched on ticket_*
+  // WebSocket events while the panel is open.
+  let assigned: Ticket[] = [];
+  let assignedAbort: AbortController | null = null;
+
   $: statusCounts = STATUS_ORDER.map(s => ({ s, n: assigned.filter(t => t.status === s).length }));
+
+  async function fetchAssigned() {
+    if (!user) return;
+    if (assignedAbort) assignedAbort.abort();
+    const ac = new AbortController();
+    assignedAbort = ac;
+    try {
+      const res = await fetch(`/api/tickets?assignee=${encodeURIComponent(user.id)}&limit=200`, { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      assigned = items.map(normalizeTicket);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+    } finally {
+      if (assignedAbort === ac) assignedAbort = null;
+    }
+  }
+
+  onMount(() => {
+    if (!isCreate && user) fetchAssigned();
+    const off = onTicketEvent(() => { if (!isCreate && user) fetchAssigned(); });
+    return () => {
+      off();
+      if (assignedAbort) assignedAbort.abort();
+    };
+  });
 
   function schedulePatch(patch: any) {
     if (!user || isCreate) return;

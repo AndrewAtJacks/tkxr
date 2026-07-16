@@ -1,18 +1,26 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import type { Sprint, Ticket, User } from './stores';
   import { claudeConfig } from './stores';
-  import { avatarColorFor, initials, sprintDotColor, STATUS_COLOR } from './util';
+  import { avatarColorFor, initials, normalizeTicket, sprintDotColor, STATUS_COLOR } from './util';
   import { copyToClipboard, showToast } from './clipboard';
   import { orchestrateSprintPrompt, sprintBreakdownPrompt } from './prompts';
   import { runPrompt } from './claudeRun';
+  import { onTicketEvent } from './ticketEvents';
   import X from './icons/X.svelte';
   import Plus from './icons/Plus.svelte';
   import Sparkles from './icons/Sparkles.svelte';
 
   export let sprint: Sprint | null = null;
   export let isCreate = false;
+  // Legacy prop retained so callers don't need to change simultaneously.
+  // Once the main ticketStore is paged (tas-RYc3-yIM), this may only contain
+  // the loaded page — so we no longer trust it. Sprint data comes from a
+  // dedicated `GET /api/tickets?sprint=<id>` fetch below (see tas-z-8q_Ljc).
   export let tickets: Ticket[] = [];
+  // Keep the prop referenced so svelte-check doesn't flag it as unused; the
+  // parent still binds it during the concurrent tas-RYc3-yIM refactor.
+  $: void tickets;
   export let users: User[] = [];
 
   const dispatch = createEventDispatcher();
@@ -28,13 +36,74 @@
       };
   let saveTimer: number | null = null;
 
+  // Dedicated slice of tickets for this sprint + a small unassigned-backlog
+  // pool for the "Add from backlog" section. Both are fetched once on mount
+  // and refetched on any `ticket_*` WebSocket event while the panel is open
+  // (subscription torn down on destroy — no ambient traffic).
+  let sprintTickets: Ticket[] = [];
+  let unassignedBacklog: Ticket[] = [];
+  let sprintTicketsAbort: AbortController | null = null;
+  let backlogAbort: AbortController | null = null;
+
   const SPRINT_LIFECYCLE: Sprint['status'][] = ['planning', 'active', 'completed'];
   $: draftStatus = (draft.status || 'planning') as Sprint['status'];
-  $: sprintTickets = sprint ? tickets.filter(t => t.sprint === sprint!.id) : [];
   $: totalPts = sprintTickets.reduce((s, t) => s + (t.estimate || 0), 0);
   $: donePts = sprintTickets.filter(t => t.status === 'done').reduce((s, t) => s + (t.estimate || 0), 0);
   $: pct = totalPts > 0 ? Math.round((donePts / totalPts) * 100) : 0;
-  $: unassignedBacklog = tickets.filter(t => t.status === 'backlog' && !t.sprint);
+
+  async function fetchSprintTickets() {
+    if (!sprint) return;
+    if (sprintTicketsAbort) sprintTicketsAbort.abort();
+    const ac = new AbortController();
+    sprintTicketsAbort = ac;
+    try {
+      const res = await fetch(`/api/tickets?sprint=${encodeURIComponent(sprint.id)}&limit=200`, { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      sprintTickets = items.map(normalizeTicket);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+      // noop — panel remains usable with stale data
+    } finally {
+      if (sprintTicketsAbort === ac) sprintTicketsAbort = null;
+    }
+  }
+
+  async function fetchUnassignedBacklog() {
+    // For the "Add from backlog" section we want backlog tickets that don't
+    // belong to any sprint. `sprint=none` selects the no-sprint bucket.
+    if (backlogAbort) backlogAbort.abort();
+    const ac = new AbortController();
+    backlogAbort = ac;
+    try {
+      const res = await fetch('/api/tickets?sprint=none&status=backlog&limit=200', { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      unassignedBacklog = items.map(normalizeTicket);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+    } finally {
+      if (backlogAbort === ac) backlogAbort = null;
+    }
+  }
+
+  async function refetchAll() {
+    await Promise.all([fetchSprintTickets(), fetchUnassignedBacklog()]);
+  }
+
+  onMount(() => {
+    if (!isCreate && sprint) refetchAll();
+    // Subscribe to ticket_* events for as long as this panel is mounted; the
+    // shared bus closes the socket automatically once we unsubscribe.
+    const off = onTicketEvent(() => { if (!isCreate && sprint) refetchAll(); });
+    return () => {
+      off();
+      if (sprintTicketsAbort) sprintTicketsAbort.abort();
+      if (backlogAbort) backlogAbort.abort();
+    };
+  });
 
   function schedulePatch(patch: any) {
     if (!sprint || isCreate) return;
@@ -151,7 +220,9 @@
 
   function runOrchestrate() {
     if (!sprint) return;
-    runPrompt(orchestrateSprintPrompt(sprint, tickets, users), {
+    // `sprintTickets` is already scoped to this sprint; the prompt helper
+    // filters again but happily accepts a pre-scoped list.
+    runPrompt(orchestrateSprintPrompt(sprint, sprintTickets, users), {
       cwd: sprint.worktree?.path,
       label: 'Orchestrate ' + sprint.name,
     });
@@ -161,7 +232,7 @@
 
   function runPlan() {
     if (!sprint || !canPlan) return;
-    runPrompt(sprintBreakdownPrompt(sprint, tickets, users), {
+    runPrompt(sprintBreakdownPrompt(sprint, sprintTickets, users), {
       cwd: sprint.worktree?.path,
       label: 'Plan ' + sprint.name,
     });

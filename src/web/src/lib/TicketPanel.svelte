@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { claudeConfig, type Sprint, type Ticket, type TicketComment, type User } from './stores';
-  import { avatarColorFor, initials, PRIORITY_META, relativeTime, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
+  import { avatarColorFor, initials, normalizeTicket, PRIORITY_META, relativeTime, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
   import { copyToClipboard, showToast } from './clipboard';
   import { runPrompt } from './claudeRun';
   import { currentUserId } from './currentUser';
@@ -13,6 +13,11 @@
   export let isCreate = false;
   export let sprints: Sprint[] = [];
   export let users: User[] = [];
+  // Retained for backwards compat. Once the main store is paged this may only
+  // contain the currently-loaded page, which is fine for the display fallback
+  // below (chip title + status lookup). Dependency *suggestions* now come from
+  // a server-side search so users can link tickets outside the loaded page —
+  // see tas-z-8q_Ljc.
   export let allTickets: Ticket[] = [];
   export let defaultSprint: string | null = null;
   export let defaultAssignee: string | null = null;
@@ -47,14 +52,61 @@
 
   $: labelList = (draft.labels || []) as string[];
   $: depList = (draft.dependsOn || []) as string[];
-  $: depSuggestions = (() => {
-    const q = depInput.trim().toLowerCase();
-    if (!q || !allTickets.length) return [];
-    return allTickets
-      .filter(t => t.id !== ticket?.id && !depList.includes(t.id))
-      .filter(t => t.id.toLowerCase().includes(q) || t.title.toLowerCase().includes(q))
-      .slice(0, 6);
-  })();
+
+  // Dependency picker suggestions are fetched from the server so users can
+  // link tickets outside the currently-loaded page of the main store (see
+  // tas-z-8q_Ljc). Debounced + in-flight-cancelled per keystroke, with a
+  // monotonic sequence to protect against out-of-order responses.
+  let depSuggestions: Ticket[] = [];
+  const DEP_SEARCH_DEBOUNCE_MS = 150;
+  const DEP_SEARCH_LIMIT = 8;
+  let depSearchTimer: number | null = null;
+  let depSearchAbort: AbortController | null = null;
+  let depSearchSeq = 0;
+
+  $: scheduleDepSearch(depInput);
+
+  function scheduleDepSearch(q: string) {
+    if (depSearchTimer !== null) { clearTimeout(depSearchTimer); depSearchTimer = null; }
+    if (depSearchAbort) { depSearchAbort.abort(); depSearchAbort = null; }
+    const trimmed = q.trim();
+    if (!trimmed) {
+      depSuggestions = [];
+      return;
+    }
+    depSearchTimer = window.setTimeout(() => runDepSearch(trimmed), DEP_SEARCH_DEBOUNCE_MS);
+  }
+
+  async function runDepSearch(q: string) {
+    const seq = ++depSearchSeq;
+    const ac = new AbortController();
+    depSearchAbort = ac;
+    try {
+      const url = `/api/tickets?q=${encodeURIComponent(q)}&limit=${DEP_SEARCH_LIMIT}`;
+      const res = await fetch(url, { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      if (seq !== depSearchSeq) return;
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      const normalized: Ticket[] = items.map(normalizeTicket);
+      depSuggestions = normalized
+        .filter(t => t.id !== ticket?.id && !depList.includes(t.id))
+        .slice(0, 6);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+    } finally {
+      if (seq === depSearchSeq) depSearchAbort = null;
+    }
+  }
+
+  onDestroy(() => {
+    if (depSearchTimer !== null) clearTimeout(depSearchTimer);
+    if (depSearchAbort) depSearchAbort.abort();
+  });
+
+  // `allTickets` may be a stale/partial page, but it's still the best local
+  // source for rendering the *chip* label (status pill next to each existing
+  // dep). Missing entries show as `missing` — same as before this change.
   $: depTicketMap = new Map(allTickets.map(t => [t.id, t]));
 
   function addDep(id: string) {
