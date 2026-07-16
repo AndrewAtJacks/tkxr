@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.1.1] - 2026-07-16
+
+### Fixed
+- **Worktree endpoints in installed/global tkxr.** `tkxr serve` chdir's into
+  its `dist/` at boot for static-asset resolution. When tkxr was installed
+  outside the target repo (global install / linked package) the fallback
+  landed in the install dir's `dist/` — outside any git repo — and every
+  worktree/git endpoint (`/api/worktrees`, `/api/tickets/:id/worktree`,
+  `/api/sprints/:id/worktree`, `/api/git/remote`, `/api/tickets/:id/git`,
+  `/api/sprints/:id/git`) failed with "Not a git repository" even though
+  the user launched from a valid repo root. The MCP-over-HTTP worktree
+  tools failed the same way. Now `serve` captures the original cwd before
+  chdir and threads it into `isGitRepo`, `listWorktrees`, `createWorktree`,
+  `createSprintWorktree`, `removeWorktree`, `getRemoteInfo`, `getRepoRoot`,
+  and `resolveClaudeCwd`. `ToolContext` gained a `repoCwd?: string` field
+  so the MCP handlers get the same fix.
+
 ## [2.1.0] - 2026-07-16
 
 ### Added
