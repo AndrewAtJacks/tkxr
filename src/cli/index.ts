@@ -16,6 +16,8 @@ import { listUsers } from './commands/users.js';
 import { manageUser } from './commands/user.js';
 import { listSprints } from './commands/sprints.js';
 import { manageSprint } from './commands/sprint.js';
+import { listEpics } from './commands/epics.js';
+import { manageEpic } from './commands/epic.js';
 import { startMCPServer } from './commands/mcp.js';
 import { manageComments } from './commands/comments.js';
 import { manageVersion } from './commands/version.js';
@@ -39,6 +41,8 @@ const commands = {
   user: manageUser,
   sprints: listSprints,
   sprint: manageSprint,
+  epics: listEpics,
+  epic: manageEpic,
   comments: manageComments,
   mcp: startMCPServer,
   version: manageVersion,
@@ -63,15 +67,17 @@ function showHelp() {
   console.log('      --order <order>       Sort order: asc, desc (default: desc)');
   console.log('      --status <status>     Filter by status: backlog, progress, review, blocked, done');
   console.log('      --assignee <id>       Filter by assignee ID');
-  console.log('      --sprint <id>         Filter by sprint ID');
-  console.log('      --verbose, -v         Show assignee and sprint names');
-  console.log('  delete <id>               Delete a ticket, sprint, user, or comment');
+  console.log('      --sprint <id>         Filter by sprint ID (or "none")');
+  console.log('      --epic <id>           Filter by epic ID (or "none")');
+  console.log('      --verbose, -v         Show assignee, sprint, and epic names');
+  console.log('  delete <id>               Delete a ticket, sprint, epic, user, or comment');
   console.log('  status <id> <status>      Update ticket status (backlog, progress, review, blocked, done)');
   console.log('  edit <id> [options]       Edit ticket fields');
   console.log('    --title <text>          New title');
   console.log('    --description <text>    New description (or --clear-description)');
   console.log('    --priority <level>      low, medium, high, critical (or --clear-priority)');
   console.log('    --estimate <n>          Story points (or --clear-estimate)');
+  console.log('    --epic <id>             Attach to an epic (or --clear-epic)');
   console.log('    --add-label <label>     Add a label (repeatable)');
   console.log('    --remove-label <label>  Remove a label (repeatable)');
   console.log('    --clear-labels          Remove all labels');
@@ -89,12 +95,24 @@ function showHelp() {
   console.log('  user edit <id-or-username> [opts]  Edit user (username/display-name/email)');
   console.log();
   console.log(chalk.green('Sprint Commands:'));
+  console.log(chalk.dim('  A sprint is the top-level workspace frame — the board is scoped to one.'));
   console.log('  sprints                            List all sprints');
   console.log('  sprint create <name>               Create a new sprint');
   console.log('  sprint status <id> <status>        Update sprint status');
   console.log('  sprint set <ticket-id> <sprint-id> Attach a ticket to a sprint');
   console.log('  sprint set <ticket-id> --unset     Remove a ticket from its sprint');
   console.log('  sprint edit <id> [opts]            Edit sprint (name/desc/goal/dates)');
+  console.log();
+  console.log(chalk.green('Epic Commands:'));
+  console.log(chalk.dim('  An epic groups tickets within a sprint (what sprints used to do).'));
+  console.log('  epics                              List all epics');
+  console.log('    --sprint <id>                    Only epics in that sprint (or "none")');
+  console.log('    --status <status>                planning|active|completed');
+  console.log('  epic create <name> [--sprint <id>] Create a new epic');
+  console.log('  epic status <id> <status>          Update epic status');
+  console.log('  epic set <ticket-id> <epic-id>     Attach a ticket to an epic');
+  console.log('  epic set <ticket-id> --unset       Remove a ticket from its epic');
+  console.log('  epic edit <id> [opts]              Edit epic (name/desc/goal/color/sprint)');
   console.log();
   console.log(chalk.green('Server Commands:'));
   console.log('  serve                     Start web + REST + MCP-over-HTTP server');
@@ -129,6 +147,9 @@ function showHelp() {
   console.log('  tkxr sprint status spr-123 active');
   console.log('  tkxr user assign tas-abc johndoe');
   console.log('  tkxr sprint set tas-abc spr-123');
+  console.log('  tkxr epic create "Auth" --sprint spr-123');
+  console.log('  tkxr epic set tas-abc epi-123');
+  console.log('  tkxr list --epic epi-123');
   console.log('  tkxr list tasks');
   console.log('  tkxr list --search "login"');
   console.log('  tkxr list --sort-by priority --order desc');
@@ -161,13 +182,17 @@ async function main() {
     return;
   }
   
-  if (args.version || args.v) {
+  const command = args._[0];
+
+  // `-v` is only the version alias for a bare `tkxr -v`. With a subcommand it
+  // belongs to that command (`list -v` = verbose), which the global check used
+  // to swallow — `tkxr list -v` printed the version instead of listing.
+  if (args.version || (args.v && !command)) {
     showVersion();
     return;
   }
-  
-  const command = args._[0];
-  
+
+
   if (!command) {
     console.log(chalk.red('Error: No command specified'));
     console.log('Run "tkxr --help" for usage information');

@@ -83,6 +83,27 @@ export class NotificationClient {
   }
 
   /**
+   * Notify server that an epic was created
+   */
+  async notifyEpicCreated(epic: any): Promise<void> {
+    await this.notify('/api/cli-notifications/epic-created', epic);
+  }
+
+  /**
+   * Notify server that an epic was updated
+   */
+  async notifyEpicUpdated(epic: any): Promise<void> {
+    await this.notify('/api/cli-notifications/epic-updated', epic);
+  }
+
+  /**
+   * Notify server that an epic was deleted
+   */
+  async notifyEpicDeleted(id: string): Promise<void> {
+    await this.notify('/api/cli-notifications/epic-deleted', { id });
+  }
+
+  /**
    * Notify server that a user was created
    */
   async notifyUserCreated(user: any): Promise<void> {

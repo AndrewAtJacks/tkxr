@@ -1,12 +1,15 @@
 import chalk from 'chalk';
 import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
-import type { Ticket, Sprint, User, TicketType } from '../../core/types.js';
+import type { Ticket, Sprint, Epic, User, TicketType } from '../../core/types.js';
 
 interface ListArgs extends minimist.ParsedArgs {
   status?: string;
   assignee?: string;
+  /** Sprint id, or the literal `none` for tickets with no sprint. */
   sprint?: string;
+  /** Epic id, or the literal `none` for tickets with no epic. */
+  epic?: string;
   format?: 'table' | 'json';
   search?: string;
   s?: string; // alias for search
@@ -16,7 +19,7 @@ interface ListArgs extends minimist.ParsedArgs {
   v?: boolean; // alias for verbose
 }
 
-function formatTicket(ticket: Ticket, verbose: boolean = false, users: User[] = [], sprints: Sprint[] = []): string {
+function formatTicket(ticket: Ticket, verbose: boolean = false, users: User[] = [], sprints: Sprint[] = [], epics: Epic[] = []): string {
   const statusColors: Record<string, (s: string) => string> = {
     backlog: chalk.gray,
     progress: chalk.yellow,
@@ -41,14 +44,18 @@ function formatTicket(ticket: Ticket, verbose: boolean = false, users: User[] = 
     const assigneeDisplay = ticket.assignee 
       ? users.find(u => u.id === ticket.assignee)?.displayName || ticket.assignee 
       : '';
-    const sprintDisplay = ticket.sprint 
-      ? sprints.find(s => s.id === ticket.sprint)?.name || ticket.sprint 
+    const sprintDisplay = ticket.sprint
+      ? sprints.find(s => s.id === ticket.sprint)?.name || ticket.sprint
       : '';
-      
-    if (assigneeDisplay || sprintDisplay) {
+    const epicDisplay = ticket.epic
+      ? epics.find(e => e.id === ticket.epic)?.name || ticket.epic
+      : '';
+
+    if (assigneeDisplay || sprintDisplay || epicDisplay) {
       const details = [];
       if (assigneeDisplay) details.push(chalk.dim(`@${assigneeDisplay}`));
       if (sprintDisplay) details.push(chalk.dim(`[${sprintDisplay}]`));
+      if (epicDisplay) details.push(chalk.dim(`🎯${epicDisplay}`));
       result += ` ${details.join(' ')}`;
     }
   }
@@ -67,6 +74,17 @@ function formatSprint(sprint: Sprint): string {
   return `${chalk.blue(sprint.id)} ${statusColor(sprint.status.padEnd(10))} ${sprint.name}`;
 }
 
+function formatEpic(epic: Epic): string {
+  const statusColors = {
+    planning: chalk.gray,
+    active: chalk.green,
+    completed: chalk.blue,
+  };
+
+  const statusColor = statusColors[epic.status] || chalk.white;
+  return `${chalk.blue(epic.id)} ${statusColor(epic.status.padEnd(10))} ${epic.name}`;
+}
+
 function formatUser(user: User): string {
   return `${chalk.blue(user.id)} ${chalk.green(user.username.padEnd(15))} ${user.displayName}`;
 }
@@ -76,17 +94,19 @@ export async function listTickets(args: ListArgs): Promise<void> {
   const storage = await createStorage();
   const verbose = args.verbose || args.v || false;
 
-  // Load user and sprint data if verbose mode is enabled
+  // Load user, sprint and epic data if verbose mode is enabled
   let users: User[] = [];
   let sprints: Sprint[] = [];
-  
+  let epics: Epic[] = [];
+
   if (verbose) {
     try {
       users = await storage.getUsers();
       sprints = await storage.getSprints();
+      epics = await storage.getEpics();
     } catch (error) {
       // Continue without verbose data if it fails to load
-      console.log(chalk.dim('Warning: Could not load user/sprint data for verbose mode'));
+      console.log(chalk.dim('Warning: Could not load user/sprint/epic data for verbose mode'));
     }
   }
 
@@ -107,7 +127,7 @@ export async function listTickets(args: ListArgs): Promise<void> {
         console.log(chalk.dim('─'.repeat(60)));
         
         filteredTickets.forEach(ticket => {
-          console.log(formatTicket(ticket, verbose, users, sprints));
+          console.log(formatTicket(ticket, verbose, users, sprints, epics));
         });
         break;
       }
@@ -127,7 +147,7 @@ export async function listTickets(args: ListArgs): Promise<void> {
         console.log(chalk.dim('─'.repeat(60)));
         
         filteredTickets.forEach(ticket => {
-          console.log(formatTicket(ticket, verbose, users, sprints));
+          console.log(formatTicket(ticket, verbose, users, sprints, epics));
         });
         break;
       }
@@ -151,6 +171,25 @@ export async function listTickets(args: ListArgs): Promise<void> {
         break;
       }
       
+      case 'epics':
+      case 'epic': {
+        const allEpics = await storage.getEpics();
+
+        if (allEpics.length === 0) {
+          console.log(chalk.yellow('No epics found'));
+          return;
+        }
+
+        console.log(chalk.bold(`\n🎯 Epics (${allEpics.length})`));
+        console.log(chalk.dim('ID'.padEnd(12) + 'STATUS'.padEnd(12) + 'NAME'));
+        console.log(chalk.dim('─'.repeat(50)));
+
+        allEpics.forEach((epic: Epic) => {
+          console.log(formatEpic(epic));
+        });
+        break;
+      }
+
       case 'users':
       case 'user': {
         const users = await storage.getUsers();
@@ -190,7 +229,7 @@ export async function listTickets(args: ListArgs): Promise<void> {
           console.log(chalk.dim('ID'.padEnd(12) + 'STATUS'.padEnd(10) + 'PRI TITLE'));
           console.log(chalk.dim('─'.repeat(60)));
           filteredTickets.forEach(ticket => {
-            console.log(formatTicket(ticket, verbose, users, sprints));
+            console.log(formatTicket(ticket, verbose, users, sprints, epics));
           });
         } else {
           // Group by type for other sorts
@@ -201,14 +240,14 @@ export async function listTickets(args: ListArgs): Promise<void> {
             console.log(chalk.bold(`\n📋 Tasks (${taskTickets.length})`));
             console.log(chalk.dim('ID'.padEnd(12) + 'STATUS'.padEnd(10) + 'PRI TITLE'));
             console.log(chalk.dim('─'.repeat(60)));
-            taskTickets.forEach(ticket => console.log(formatTicket(ticket, verbose, users, sprints)));
+            taskTickets.forEach(ticket => console.log(formatTicket(ticket, verbose, users, sprints, epics)));
           }
           
           if (bugTickets.length > 0) {
             console.log(chalk.bold(`\n🐛 Bugs (${bugTickets.length})`));
             console.log(chalk.dim('ID'.padEnd(12) + 'STATUS'.padEnd(10) + 'PRI TITLE'));
             console.log(chalk.dim('─'.repeat(60)));
-            bugTickets.forEach(ticket => console.log(formatTicket(ticket, verbose, users, sprints)));
+            bugTickets.forEach(ticket => console.log(formatTicket(ticket, verbose, users, sprints, epics)));
           }
         }
         
@@ -230,10 +269,18 @@ function filterTickets(tickets: Ticket[], args: ListArgs): Ticket[] {
     if (args.assignee && ticket.assignee !== args.assignee) {
       return false;
     }
-    if (args.sprint && ticket.sprint !== args.sprint) {
-      return false;
+    // `none` matches the unsorted bucket, mirroring the REST/MCP filters and
+    // the board's Unsorted workspace.
+    if (args.sprint) {
+      const matches = args.sprint === 'none' ? !ticket.sprint : ticket.sprint === args.sprint;
+      if (!matches) return false;
     }
-    
+    if (args.epic) {
+      const matches = args.epic === 'none' ? !ticket.epic : ticket.epic === args.epic;
+      if (!matches) return false;
+    }
+
+
     // Search functionality
     const searchTerm = args.search || args.s;
     if (searchTerm) {

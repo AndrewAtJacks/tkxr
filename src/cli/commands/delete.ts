@@ -59,10 +59,17 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
     // for every ticket that was auto-unassigned by the delete.
     let deleted = false;
     let unassignedTickets: Awaited<ReturnType<typeof storage.deleteUser>>['unassignedTickets'] = [];
+    // Deleting an epic clears `epic` on every ticket that pointed at it, so we
+    // need the swept list to re-broadcast those tickets to the board.
+    let sweptTickets: Awaited<ReturnType<typeof storage.deleteEpic>>['sweptTickets'] = [];
     if (entityType === 'users') {
       const r = await storage.deleteUser(id);
       deleted = r.deleted;
       unassignedTickets = r.unassignedTickets;
+    } else if (entityType === 'epics') {
+      const r = await storage.deleteEpic(id);
+      deleted = r.ok;
+      sweptTickets = r.sweptTickets;
     } else {
       deleted = await storage.deleteEntity(entityType, id);
     }
@@ -72,6 +79,15 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
         await notifier.notifyTicketDeleted(id);
       } else if (entityType === 'sprints') {
         await notifier.notifySprintDeleted(id);
+      } else if (entityType === 'epics') {
+        await notifier.notifyEpicDeleted(id);
+        for (const t of sweptTickets) {
+          await notifier.notifyTicketUpdated(t);
+        }
+        if (sweptTickets.length) {
+          console.log(chalk.dim(`  Ungrouped ${sweptTickets.length} ticket(s): ${sweptTickets.map(t => t.id).join(', ')}`));
+          console.log(chalk.dim('  They stay in their sprint — find them with: tkxr list --epic none'));
+        }
       } else if (entityType === 'users') {
         await notifier.notifyUserDeleted(id);
         for (const t of unassignedTickets) {

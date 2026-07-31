@@ -929,6 +929,54 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
+  app.post('/api/cli-notifications/epic-created', async (req, res) => {
+    try {
+      const epic = req.body;
+
+      // Broadcast to WebSocket clients
+      broadcast(wss, {
+        type: 'epic_created',
+        data: epic
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to process notification' });
+    }
+  });
+
+  app.post('/api/cli-notifications/epic-updated', async (req, res) => {
+    try {
+      const epic = req.body;
+
+      // Broadcast to WebSocket clients
+      broadcast(wss, {
+        type: 'epic_updated',
+        data: epic
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to process notification' });
+    }
+  });
+
+  app.post('/api/cli-notifications/epic-deleted', async (req, res) => {
+    try {
+      const { id } = req.body;
+
+      // Broadcast to WebSocket clients
+      broadcast(wss, {
+        type: 'epic_deleted',
+        data: { id }
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to process notification' });
+    }
+  });
+
   app.post('/api/cli-notifications/user-created', async (req, res) => {
     try {
       const user = req.body;
