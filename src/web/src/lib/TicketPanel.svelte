@@ -7,7 +7,7 @@
   import CopyId from './CopyId.svelte';
   import { runPrompt } from './claudeRun';
   import { currentUserId } from './currentUser';
-  import { commitTicketPrompt, ticketAskPrompt, workOnTicketPrompt } from './prompts';
+  import { codeReviewTicketPrompt, ticketAskPrompt, workOnTicketPrompt } from './prompts';
   import X from './icons/X.svelte';
   import Sparkles from './icons/Sparkles.svelte';
   import BranchInsights from './BranchInsights.svelte';
@@ -191,11 +191,13 @@
       label: 'Work on ' + ticket.id,
     });
   }
-  function commitWithClaude() {
+  // In-review tickets get a code review, not "work on it" / "commit it" — the work
+  // is supposed to be finished by the time it lands here (tas-MvL7qIcv).
+  function codeReviewWithClaude() {
     if (!ticket) return;
-    runPrompt(commitTicketPrompt(ticket, users, sprints, allTickets), {
+    runPrompt(codeReviewTicketPrompt(ticket, users, sprints, allTickets), {
       cwd: ticket.worktree?.path,
-      label: 'Commit ' + ticket.id,
+      label: 'Review ' + ticket.id,
     });
   }
 
@@ -653,19 +655,19 @@
         {/if}
       </div>
 
-      <button class="work-btn" on:click={copyWorkOn}>
-        <Sparkles size={14} color="#fff" />
-        <span>Work on this</span>
-      </button>
-
       {#if ticket.status === 'review'}
-        <button class="commit-btn" on:click={commitWithClaude} title={ticket.worktree ? `Commit in ${ticket.worktree.path}` : 'No worktree recorded — Claude will ask before touching main'}>
+        <button class="work-btn" on:click={codeReviewWithClaude} title={ticket.worktree ? `Review ${ticket.worktree.branch}` : 'No worktree recorded — Claude will locate the change from git history'}>
           <Sparkles size={14} color="#fff" />
-          <span>Commit with Claude</span>
+          <span>Code review this</span>
         </button>
         <div class="ai-hint">
-          Runs Claude in {ticket.worktree ? 'the ticket worktree' : 'the repo root'} to craft a Conventional Commit (<code>&lt;type&gt;(&lt;scope&gt;): … ({ticket.id})</code>) from the current diff.
+          Reviews {ticket.worktree ? 'the work on ' : 'the change for '}<code>{ticket.worktree ? ticket.worktree.branch : ticket.id}</code> against the ticket, posts findings as a comment, and moves the ticket back to <strong>In Progress</strong> if changes are outstanding. It won't write the fix or commit.
         </div>
+      {:else}
+        <button class="work-btn" on:click={copyWorkOn}>
+          <Sparkles size={14} color="#fff" />
+          <span>Work on this</span>
+        </button>
       {/if}
 
       <div class="ai-hint" style="margin-top:2px">Or a narrower question:</div>
@@ -1025,22 +1027,6 @@
     transition: opacity .12s;
   }
   .work-btn:hover { opacity: .9; }
-  .commit-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 9px 12px;
-    background: linear-gradient(135deg, #46c17f, #2f8f5b);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    font-size: 12.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity .12s;
-  }
-  .commit-btn:hover { opacity: .9; }
   .ai-hint code {
     background: var(--surface);
     border-radius: 4px;
