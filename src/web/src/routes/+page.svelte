@@ -224,6 +224,10 @@
       return;
     }
     if (typing) return;
+    // Bare-letter shortcuts only. Without this guard Ctrl/Cmd+C was caught by
+    // the `c` case below, so copying a selected ticket id closed the panel and
+    // opened the create form instead (tas-PchLjBAh). Same for Ctrl+B / Ctrl+L.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === '/') { e.preventDefault(); const el = document.getElementById('toolbar-search') as HTMLInputElement | null; el?.focus(); return; }
     if (e.key.toLowerCase() === 'c') { e.preventDefault(); newTicket(); }
     if (e.key.toLowerCase() === 'b') { view = 'board'; panel = null; }

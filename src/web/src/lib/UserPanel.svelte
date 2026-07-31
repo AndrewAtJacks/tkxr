@@ -4,6 +4,7 @@
   import { avatarColorFor, AVATAR_PALETTE, initials, normalizeTicket, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
   import { onTicketEvent } from './ticketEvents';
   import X from './icons/X.svelte';
+  import CopyId from './CopyId.svelte';
 
   export let user: User | null = null;
   export let isCreate = false;
@@ -107,7 +108,11 @@
 
 <header class="head">
   <span class="avatar" style="background:{draft.color || avatarColorFor({ id: 'x' })}">{initials(draft.displayName || '?')}</span>
-  <span class="mono id">{isCreate ? 'NEW PERSON' : user?.id}</span>
+  {#if isCreate || !user?.id}
+    <span class="mono id">NEW PERSON</span>
+  {:else}
+    <span class="id"><CopyId value={user.id} label="User ID" grow /></span>
+  {/if}
   <button class="close" on:click={() => dispatch('close')}><X size={16} /></button>
 </header>
 

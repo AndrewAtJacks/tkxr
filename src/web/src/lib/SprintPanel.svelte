@@ -4,6 +4,7 @@
   import { claudeAvailable } from './settings';
   import { avatarColorFor, initials, normalizeTicket, sprintDotColor, STATUS_COLOR } from './util';
   import { copyToClipboard, showToast } from './clipboard';
+  import CopyId from './CopyId.svelte';
   import { commitSprintPrompt, orchestrateSprintPrompt, sprintBreakdownPrompt } from './prompts';
   import BranchInsights from './BranchInsights.svelte';
   import { runPrompt } from './claudeRun';
@@ -275,7 +276,11 @@
 
 <header class="head">
   <span class="dot" style="background:{sprintDotColor(draftStatus)}"></span>
-  <span class="mono id">{isCreate ? 'NEW SPRINT' : sprint?.id}</span>
+  {#if isCreate || !sprint?.id}
+    <span class="mono id">NEW SPRINT</span>
+  {:else}
+    <span class="id"><CopyId value={sprint.id} label="Sprint ID" grow /></span>
+  {/if}
   {#if !isCreate}
     <span class="status-pill" style="color:{sprintDotColor(draftStatus)};background:{sprintDotColor(draftStatus)}22">{draftStatus}</span>
   {/if}
