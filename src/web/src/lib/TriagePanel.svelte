@@ -51,14 +51,19 @@
         kind: 'filter',
       });
     }
-    const backlog = open.filter(t => t.status === 'backlog' && !t.sprint);
-    if (backlog.length >= 4) {
+    // A sprint frames the whole workspace now (tas-hr2pCGjr), so "backlog with
+    // no sprint" no longer describes anything the user is looking at — it could
+    // never fire. Epics are the in-workspace grouping, so the equivalent signal
+    // is ungrouped backlog.
+    const ungrouped = open.filter(t => t.status === 'backlog' && !t.epic);
+    if (ungrouped.length >= 4) {
       items.push({
         id: 'plan',
         severity: 'info',
-        title: `Draft the next sprint (${backlog.length} backlog tickets)`,
-        detail: 'Auto-balance a planning sprint from the backlog.',
-        kind: 'draft_sprint',
+        title: `${ungrouped.length} backlog tickets have no epic`,
+        detail: 'Group them so the board reads as work streams, not a flat list.',
+        kind: 'filter',
+        params: { epic: 'none' },
       });
     }
     return {

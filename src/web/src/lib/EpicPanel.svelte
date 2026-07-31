@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { Epic, Ticket } from './stores';
+  import type { Epic, Sprint, Ticket } from './stores';
   import CopyId from './CopyId.svelte';
   import X from './icons/X.svelte';
 
@@ -8,6 +8,8 @@
   export let isCreate = false;
   /** Sprint (workspace) the epic belongs to — new epics default into it. */
   export let sprintId: string | null = null;
+  /** All sprints — backs the "move this epic to another workspace" selector. */
+  export let sprints: Sprint[] = [];
   export let tickets: Ticket[] = [];
 
   const dispatch = createEventDispatcher();
@@ -23,6 +25,13 @@
   function setStatus(v: string) {
     draft.status = v as Epic['status'];
     if (!isCreate) schedulePatch({ status: draft.status });
+  }
+
+  // Moving an epic between workspaces. `''` maps to the Unsorted workspace
+  // (no sprint), which the server stores as an absent `sprint` field.
+  function setSprint(v: string) {
+    draft.sprint = v || undefined;
+    if (!isCreate) schedulePatch({ sprint: v || null });
   }
 
   $: scoped = epic ? tickets.filter(t => t.epic === epic!.id) : [];
@@ -108,6 +117,18 @@
       <option value="planning">Planning</option>
       <option value="active">Active</option>
       <option value="completed">Completed</option>
+    </select>
+
+    <span class="label">Sprint</span>
+    <select
+      class="input"
+      value={draft.sprint || ''}
+      on:change={(e) => setSprint(e.currentTarget.value)}
+    >
+      <option value="">Unsorted (no sprint)</option>
+      {#each sprints as s (s.id)}
+        <option value={s.id}>{s.name}</option>
+      {/each}
     </select>
 
     <span class="label">Color</span>

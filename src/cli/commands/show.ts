@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
-import type { Sprint, Ticket, TicketStatus, User } from '../../core/types.js';
+import type { Epic, Sprint, Ticket, TicketStatus, User } from '../../core/types.js';
 
 interface ShowArgs extends minimist.ParsedArgs {
   _: string[];
@@ -12,7 +12,7 @@ export async function showTicket(args: ShowArgs): Promise<void> {
 
   if (!id) {
     console.log(chalk.red('Error: Please provide an entity ID'));
-    console.log(chalk.dim('Usage: tkxr show <id>  (ticket, sprint, or user)'));
+    console.log(chalk.dim('Usage: tkxr show <id>  (ticket, sprint, epic, or user)'));
     return;
   }
 
@@ -32,6 +32,8 @@ export async function showTicket(args: ShowArgs): Promise<void> {
       await renderTicket(storage, entity as Ticket);
     } else if (type === 'sprints') {
       renderSprint(entity as Sprint);
+    } else if (type === 'epics') {
+      await renderEpic(storage, entity as Epic);
     } else if (type === 'users') {
       renderUser(entity as User);
     } else {
@@ -45,6 +47,13 @@ export async function showTicket(args: ShowArgs): Promise<void> {
 async function renderTicket(storage: any, ticket: Ticket): Promise<void> {
   const users = await storage.getUsers();
   const sprints = await storage.getSprints();
+  const epics = await storage.getEpics();
+
+  const getEpicName = (epicId: string | undefined) => {
+    if (!epicId) return undefined;
+    const epic = epics.find((e: Epic) => e.id === epicId);
+    return epic?.name || epicId;
+  };
 
   const getUserDisplayName = (userId: string | undefined) => {
     if (!userId) return undefined;
@@ -96,6 +105,10 @@ async function renderTicket(storage: any, ticket: Ticket): Promise<void> {
     console.log(`${chalk.blue('Sprint:')}    ${getSprintName(ticket.sprint)}`);
   }
 
+  if (ticket.epic) {
+    console.log(`${chalk.blue('Epic:')}      ${getEpicName(ticket.epic)}`);
+  }
+
   if (ticket.estimate) {
     console.log(`${chalk.blue('Estimate:')}  ${ticket.estimate} ${ticket.estimate === 1 ? 'point' : 'points'}`);
   }
@@ -140,6 +153,40 @@ function renderSprint(sprint: Sprint): void {
   console.log();
   console.log(chalk.dim(`Created: ${new Date(sprint.createdAt).toLocaleString()}`));
   console.log(chalk.dim(`Updated: ${new Date(sprint.updatedAt).toLocaleString()}`));
+  console.log();
+}
+
+async function renderEpic(storage: any, epic: Epic): Promise<void> {
+  const statusColors = {
+    planning: chalk.yellow,
+    active: chalk.blue,
+    completed: chalk.green,
+  } as const;
+  const statusColor = statusColors[epic.status] || chalk.white;
+
+  const sprints = await storage.getSprints();
+  const sprint = epic.sprint ? sprints.find((s: Sprint) => s.id === epic.sprint) : undefined;
+  const tickets: Ticket[] = await storage.getAllTickets();
+  const scoped = tickets.filter(t => t.epic === epic.id);
+  const done = scoped.filter(t => t.status === 'done').length;
+  const points = scoped.reduce((s, t) => s + (t.estimate || 0), 0);
+
+  console.log();
+  console.log(chalk.bold(`🎯 ${epic.name}`));
+  console.log(chalk.dim('─'.repeat(50)));
+  console.log(`${chalk.blue('ID:')}        ${epic.id}`);
+  console.log(`${chalk.blue('Status:')}    ${statusColor(epic.status)}`);
+  console.log(`${chalk.blue('Sprint:')}    ${epic.sprint ? (sprint?.name || epic.sprint) : chalk.dim('none')}`);
+  if (epic.goal) console.log(`${chalk.blue('Goal:')}      ${epic.goal}`);
+  console.log(`${chalk.blue('Tickets:')}   ${scoped.length} (${done} done, ${points} pts)`);
+  if (epic.description) {
+    console.log();
+    console.log(chalk.blue('Description:'));
+    console.log(epic.description);
+  }
+  console.log();
+  console.log(chalk.dim(`Created: ${new Date(epic.createdAt).toLocaleString()}`));
+  console.log(chalk.dim(`Updated: ${new Date(epic.updatedAt).toLocaleString()}`));
   console.log();
 }
 

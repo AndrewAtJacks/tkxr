@@ -36,6 +36,11 @@
   let view: 'board' | 'list' = 'board';
   // `activeSprint` is now the *workspace* — the sprint that frames the whole
   // board. '' means no workspace picked yet (→ the SprintSwitcher gate).
+  // The literal `none` is the "Unsorted" pseudo-workspace: tickets that have
+  // no sprint at all. Without it, pre-existing sprintless tickets (and any
+  // ticket orphaned by deleting a sprint) would be unreachable from the UI —
+  // the storage + API layers already understand `sprint=none`.
+  const UNSORTED = 'none';
   let activeSprint: string = '';
   // `activeEpic` is the in-workspace grouping filter that replaced the old
   // sprint-as-filter role. 'all' = show every epic, 'none' = tickets with no
@@ -59,6 +64,9 @@
   // page). Populated via `/api/tickets/id/:id` before mounting the panel.
   let openedTicket: Ticket | null = null;
   let paletteOpen = false;
+  // Set once the first `reload()` resolves. Declared up here (rather than next
+  // to its reactive consumer) so the store-loaded guards below can read it.
+  let mounted = false;
   let version = '';
   let commentCounts: Record<string, number> = {};
 
@@ -87,22 +95,38 @@
     } catch { /* noop */ }
   }
 
-  // The active workspace resolved from the current sprint id. Null → gate.
-  $: workspaceSprint = activeSprint ? ($sprintStore as Sprint[]).find(s => s.id === activeSprint) || null : null;
+  // The Unsorted pseudo-workspace has no backing Sprint record.
+  $: isUnsorted = activeSprint === UNSORTED;
+  // The active workspace resolved from the current sprint id. Null → gate,
+  // unless we're in Unsorted (which is a valid workspace with no Sprint row).
+  $: workspaceSprint = activeSprint && !isUnsorted
+    ? ($sprintStore as Sprint[]).find(s => s.id === activeSprint) || null
+    : null;
+  $: hasWorkspace = isUnsorted || !!workspaceSprint;
   // Epics scoped to the active workspace drive the sidebar grouping + filter.
-  $: workspaceEpics = ($epicStore as Epic[]).filter(e => e.sprint === activeSprint);
+  // Unsorted collects the epics that aren't attached to any sprint.
+  $: workspaceEpics = ($epicStore as Epic[]).filter(e => (isUnsorted ? !e.sprint : e.sprint === activeSprint));
 
   // If the active workspace sprint disappears (deleted elsewhere) drop back to
-  // the gate rather than silently showing an empty board.
+  // the gate rather than silently showing an empty board. Unsorted is exempt —
+  // it never has a Sprint record to look up.
+  // (Compares against UNSORTED inline rather than reading `isUnsorted` — going
+  // through the derived value would make this a cyclical reactive dependency.)
   $: if (activeSprint
+      && activeSprint !== UNSORTED
       && $sprintStore.length > 0
       && !($sprintStore as Sprint[]).some(s => s.id === activeSprint)) {
     activeSprint = '';
   }
   // If the active epic filter points at an epic that no longer exists (deleted
-  // or belongs to another workspace), clear it back to "all".
+  // or belongs to another workspace), clear it back to "all". Gated on
+  // `mounted` — the old `$epicStore.length >= 0` was always true, so on first
+  // mount (empty store) this wiped the epic filter restored from localStorage
+  // before `/api/epics` had resolved. `mounted` is set after the first
+  // `reload()`, which is a real "epics have loaded" signal and, unlike the
+  // sibling guards' `> 0` proxy, still fires once the last epic is deleted.
   $: if (activeEpic !== 'all' && activeEpic !== 'none'
-      && $epicStore.length >= 0
+      && mounted
       && !workspaceEpics.some(e => e.id === activeEpic)) {
     activeEpic = 'all';
   }
@@ -199,7 +223,6 @@
   // needs to react — the old client-side filter block is gone. We gate on
   // `mounted` so the initial `reload()` (which itself does the first fetch)
   // isn't racing with this reactive statement's mount-time fire.
-  let mounted = false;
   $: if (browser && mounted) {
     // Read all filter inputs so Svelte tracks them, then fire-and-forget.
     void activeSprint; void activeEpic; void activeUser; void typeFilter; void sortBy; void search;
@@ -295,10 +318,12 @@
       if (e) return e.name;
     }
     if (activeEpic === 'none') return 'No epic';
+    if (isUnsorted) return 'Unsorted';
     return workspaceSprint?.name || 'Workspace';
   })();
 
   $: contextSubtitle = (() => {
+    if (isUnsorted) return 'Tickets that belong to no sprint';
     const base = workspaceSprint?.name || '';
     if (activeEpic !== 'all' && activeEpic !== 'none') {
       const e = ($epicStore as Epic[]).find(ep => ep.id === activeEpic);
@@ -315,7 +340,8 @@
   // burn strip to the `/api/tickets/summary` endpoint (tas-4MNJ9qP5) — no
   // client-side sum needed then.
   $: burn = (() => {
-    if (!activeSprint) return null;
+    // Unsorted isn't a real sprint — there's nothing to burn down.
+    if (!activeSprint || isUnsorted) return null;
     const scoped = ($ticketStore as Ticket[]).filter(t => t.sprint === activeSprint);
     const total = scoped.reduce((s, t) => s + (t.estimate || 0), 0);
     const done = scoped.filter(t => t.status === 'done').reduce((s, t) => s + (t.estimate || 0), 0);
@@ -419,7 +445,7 @@
   // Show the workspace picker as a gate when no valid sprint is active, or on
   // demand when the user explicitly asks to switch. Wait for the first load
   // (`mounted`) so we don't flash the gate before sprints arrive.
-  $: needWorkspace = mounted && !workspaceSprint;
+  $: needWorkspace = mounted && !hasWorkspace;
   $: showWorkspacePicker = needWorkspace || showSwitcher;
 </script>
 
@@ -434,6 +460,8 @@
     {activeEpic}
     {activeUser}
     workspace={workspaceSprint}
+    unsorted={isUnsorted}
+    sprintScope={activeSprint}
     epics={workspaceEpics}
     users={$userStore}
     tickets={$ticketStore}
@@ -459,7 +487,6 @@
     {#if showWorkspacePicker}
       <SprintSwitcher
         sprints={$sprintStore}
-        tickets={$ticketStore}
         {activeSprint}
         gate={needWorkspace}
         on:select={(e) => selectWorkspace(e.detail)}
@@ -499,7 +526,7 @@
         {:else}
           <ListView
             tickets={filtered}
-            sprints={$sprintStore}
+            epics={workspaceEpics}
             users={$userStore}
             on:open={(e) => openTicket(e.detail)}
           />
@@ -519,7 +546,7 @@
         epics={workspaceEpics}
         users={$userStore}
         allTickets={$ticketStore}
-        defaultSprint={activeSprint || null}
+        defaultSprint={activeSprint && !isUnsorted ? activeSprint : null}
         defaultEpic={activeEpic !== 'all' && activeEpic !== 'none' ? activeEpic : null}
         defaultAssignee={activeUser !== 'all' && activeUser !== 'none' ? activeUser : null}
         on:reload={reload}
@@ -544,7 +571,8 @@
       <EpicPanel
         epic={activeEpicSel}
         {isCreate}
-        sprintId={activeSprint || null}
+        sprintId={activeSprint && !isUnsorted ? activeSprint : null}
+        sprints={$sprintStore}
         tickets={$ticketStore}
         on:reload={reload}
         on:close={closePanel}
@@ -573,6 +601,7 @@
       on:applyFilter={(e) => {
         const p = e.detail || {};
         if (p.assignee === 'none') activeUser = 'none';
+        if (p.epic) activeEpic = p.epic;
         if (p.view) view = p.view;
         panel = null;
       }}

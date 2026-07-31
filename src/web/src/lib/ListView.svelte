@@ -1,13 +1,16 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
-  import { pagedTickets, type Sprint, type Ticket, type User } from './stores';
+  import { pagedTickets, type Epic, type Ticket, type User } from './stores';
   import { avatarColorFor, initials, STATUS_COLOR, STATUS_LABEL } from './util';
   import { draggingTicketId } from './drag';
   import Bug from './icons/Bug.svelte';
   import CheckSquare from './icons/CheckSquare.svelte';
 
   export let tickets: Ticket[] = [];
-  export let sprints: Sprint[] = [];
+  // The board is workspace-scoped now, so a Sprint column would print the same
+  // name on every row. Epics are the meaningful in-workspace grouping — mirror
+  // the epic chip BoardCard shows.
+  export let epics: Epic[] = [];
   export let users: User[] = [];
 
   const dispatch = createEventDispatcher();
@@ -21,7 +24,7 @@
   const pagedNextCursor = pagedTickets.nextCursor;
   const pagedTotal = pagedTickets.total;
 
-  $: sprintById = new Map(sprints.map(s => [s.id, s]));
+  $: epicById = new Map(epics.map(e => [e.id, e]));
   $: userById = new Map(users.map((u, i) => [u.id, { user: u, index: i }]));
 
   let draggingId: string | null = null;
@@ -88,12 +91,12 @@
     <span>ID</span>
     <span>Title</span>
     <span>Status</span>
-    <span>Sprint</span>
+    <span>Epic</span>
     <span>Pts</span>
     <span>Owner</span>
   </div>
   {#each tickets as t (t.id)}
-    {@const sprint = t.sprint ? sprintById.get(t.sprint) : undefined}
+    {@const epic = t.epic ? epicById.get(t.epic) : undefined}
     {@const asg = t.assignee ? userById.get(t.assignee) : undefined}
     <button
       class="row"
@@ -110,7 +113,14 @@
       <span class="mono id">{t.id}</span>
       <span class="title">{t.title}</span>
       <span class="status" style="color:{STATUS_COLOR[t.status]}">{STATUS_LABEL[t.status]}</span>
-      <span class="sprint">{sprint?.name || '—'}</span>
+      <span class="epic">
+        {#if epic}
+          <span class="epic-dot" style="background:{epic.color || 'var(--faint)'}"></span>
+          <span class="epic-name">{epic.name}</span>
+        {:else}
+          —
+        {/if}
+      </span>
       <span class="mono pts">{t.estimate ?? '—'}</span>
       <span class="owner">
         {#if asg}
@@ -179,7 +189,16 @@
   .id { color: var(--faint); font-size: 10.5px; }
   .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status { font-weight: 600; font-size: 11.5px; }
-  .sprint { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .epic {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .epic-dot { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+  .epic-name { overflow: hidden; text-overflow: ellipsis; }
   .pts { color: var(--faint); }
   .owner { display: flex; align-items: center; justify-content: center; }
   .avatar {

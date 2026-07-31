@@ -22,6 +22,13 @@
   export let view: 'board' | 'list' = 'board';
   // Active workspace (sprint) — the frame the whole board sits inside.
   export let workspace: Sprint | null = null;
+  /** True when the active workspace is the "Unsorted" pseudo-sprint. */
+  export let unsorted = false;
+  /**
+   * Raw workspace id used to scope `/api/tickets/summary`. A sprint id, the
+   * literal `none` (Unsorted), or '' before a workspace is picked.
+   */
+  export let sprintScope: string = '';
   // In-workspace epic grouping filter. 'all' | 'none' | epic id.
   export let activeEpic: string = 'all';
   export let epics: Epic[] = [];
@@ -52,6 +59,10 @@
     counts: { total: number; backlog: number; progress: number; review: number; blocked: number; done: number };
     triage: { unassignedOpen: number; criticalOpen: number; backlogCount: number };
     byStatus: { backlog: number; progress: number; review: number; blocked: number; done: number };
+    /** Ticket count per epic id within the scoped workspace; `none` = no epic. */
+    byEpic?: Record<string, number>;
+    /** Ticket count per assignee id within the scoped workspace; `none` = unassigned. */
+    byAssignee?: Record<string, number>;
   }
   let summary: TicketSummary | null = null;
   let summaryAbort: AbortController | null = null;
@@ -76,7 +87,13 @@
     const ac = new AbortController();
     summaryAbort = ac;
     try {
-      const res = await fetch('/api/tickets/summary', { signal: ac.signal });
+      // Scope the aggregate to the active workspace — an unscoped project-wide
+      // total would contradict the workspace-scoped board beside it now that a
+      // sprint frames the whole view.
+      const url = sprintScope
+        ? `/api/tickets/summary?sprint=${encodeURIComponent(sprintScope)}`
+        : '/api/tickets/summary';
+      const res = await fetch(url, { signal: ac.signal });
       if (!res.ok) return;
       summary = await res.json();
     } catch (err) {
@@ -84,6 +101,14 @@
     } finally {
       if (summaryAbort === ac) summaryAbort = null;
     }
+  }
+
+  // Refetch whenever the workspace changes so the badges follow the board.
+  // Gated on `summaryMounted` so this doesn't race the onMount fetch.
+  let summaryMounted = false;
+  $: if (summaryMounted) {
+    void sprintScope;
+    fetchSummary();
   }
 
   // Recompute triage count the same way `+page.svelte` did (unassigned open,
@@ -129,6 +154,7 @@
     // `scheduleSummaryRefetch`) so board drags / bulk imports don't hammer
     // `/api/tickets/summary`.
     offTicketEvents = onTicketEvent(() => scheduleSummaryRefetch());
+    summaryMounted = true;
   });
   onDestroy(() => {
     window.removeEventListener('mousedown', onWindowClick);
@@ -138,15 +164,27 @@
     if (summaryAbort) summaryAbort.abort();
   });
 
-  // Prefer server total when available so the "All tickets" badge is correct
-  // even after the main ticket store transitions to paged loading.
+  // Prefer server totals when available so the badges stay correct once the
+  // main ticket store transitions to paged loading. `summary` is scoped to the
+  // active workspace, so these agree with the board. The `tickets`-derived
+  // fallbacks only cover the window before the first summary lands (they read
+  // the current page, so they under-count).
   $: totalCount = summary ? summary.counts.total : tickets.length;
-  // Epic + user counts are computed from the currently-loaded (workspace-scoped)
-  // page. Approximate until the summary endpoint grows epic buckets — same
-  // caveat the burn strip carries.
-  $: epicCounts = new Map(epics.map(e => [e.id, tickets.filter(t => t.epic === e.id).length]));
-  $: noEpicCount = tickets.filter(t => !t.epic).length;
-  $: userCounts = new Map(users.map(u => [u.id, tickets.filter(t => t.assignee === u.id).length]));
+  $: epicCounts = new Map(
+    epics.map(e => [
+      e.id,
+      summary?.byEpic ? (summary.byEpic[e.id] || 0) : tickets.filter(t => t.epic === e.id).length,
+    ]),
+  );
+  $: noEpicCount = summary?.byEpic
+    ? (summary.byEpic.none || 0)
+    : tickets.filter(t => !t.epic).length;
+  $: userCounts = new Map(
+    users.map(u => [
+      u.id,
+      summary?.byAssignee ? (summary.byAssignee[u.id] || 0) : tickets.filter(t => t.assignee === u.id).length,
+    ]),
+  );
 
   function onCliToggle(e: Event) {
     const t = e.currentTarget as HTMLInputElement;
@@ -250,10 +288,10 @@
 
   <div class="workspace">
     <button class="ws-main" class:active={switcherOpen} on:click={switchSprint} title="Switch sprint">
-      <span class="dot" style="background:{workspace ? sprintDotColor(workspace.status) : 'var(--faint)'}"></span>
+      <span class="dot" style="background:{workspace ? sprintDotColor(workspace.status) : unsorted ? 'var(--surface-3)' : 'var(--faint)'}"></span>
       <div class="ws-meta">
         <div class="ws-kicker">Sprint</div>
-        <div class="ws-name">{workspace ? workspace.name : 'No sprint selected'}</div>
+        <div class="ws-name">{workspace ? workspace.name : unsorted ? 'Unsorted' : 'No sprint selected'}</div>
       </div>
       <span class="ws-switch">Switch</span>
     </button>
@@ -320,7 +358,13 @@
       </button>
     {/if}
     {#if epics.length === 0}
-      <div class="epics-empty">No epics yet — group this sprint's tickets by creating one.</div>
+      <div class="epics-empty">
+        {#if unsorted}
+          These tickets have no sprint. Move them into one from the ticket panel, or group them with an epic.
+        {:else}
+          No epics yet — group this sprint's tickets by creating one.
+        {/if}
+      </div>
     {/if}
   </div>
 

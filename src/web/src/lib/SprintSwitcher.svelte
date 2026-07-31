@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { Sprint, Ticket } from './stores';
+  import { createEventDispatcher, onMount } from 'svelte';
+  import { sprintStore, type Sprint } from './stores';
   import { sprintDotColor } from './util';
+  import { onTicketEvent } from './ticketEvents';
   import Plus from './icons/Plus.svelte';
 
   // The sprint switcher is the "workspace picker" — a sprint now frames the
@@ -9,10 +10,12 @@
   // rather than an inline filter chip. Shown as a gate when no workspace is
   // active, and on demand via the sidebar "Switch" button.
   export let sprints: Sprint[] = [];
-  export let tickets: Ticket[] = [];
   export let activeSprint: string = '';
   /** When true there is no active workspace yet — copy nudges toward creating one. */
   export let gate = false;
+
+  /** Id of the "Unsorted" pseudo-workspace (tickets with no sprint). */
+  const UNSORTED = 'none';
 
   const dispatch = createEventDispatcher();
 
@@ -21,7 +24,41 @@
   let goal = '';
   let busy = false;
 
-  $: counts = new Map(sprints.map(s => [s.id, tickets.filter(t => t.sprint === s.id).length]));
+  // Per-sprint totals come from `/api/tickets/summary`'s project-wide
+  // `bySprint` bucket. The old client-side count read the parent's paged
+  // ticket slice, so every card under-reported once paging kicked in.
+  let bySprint: Record<string, number> = {};
+  let countsAbort: AbortController | null = null;
+  async function fetchCounts() {
+    if (countsAbort) countsAbort.abort();
+    const ac = new AbortController();
+    countsAbort = ac;
+    try {
+      const res = await fetch('/api/tickets/summary', { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      bySprint = j.bySprint || {};
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+    } finally {
+      if (countsAbort === ac) countsAbort = null;
+    }
+  }
+  onMount(() => {
+    fetchCounts();
+    const off = onTicketEvent(() => fetchCounts());
+    return () => {
+      off();
+      if (countsAbort) countsAbort.abort();
+    };
+  });
+
+  $: unsortedCount = bySprint[UNSORTED] || 0;
+  // Unsorted is only worth showing when it holds something — or when the user
+  // is already standing in it. Without this card, tickets with no sprint (all
+  // pre-existing data, plus anything orphaned by deleting a sprint) would have
+  // no route back into the UI.
+  $: showUnsorted = unsortedCount > 0 || activeSprint === UNSORTED;
   $: ordered = [...sprints].sort((a, b) => {
     // Active workspaces first, then planning, then completed; newest within a bucket.
     const rank = (s: Sprint) => (s.status === 'active' ? 0 : s.status === 'planning' ? 1 : 2);
@@ -49,6 +86,13 @@
         name = '';
         goal = '';
         creating = false;
+        // Push the new sprint into the store *before* selecting it. The
+        // parent's "workspace still exists?" guard runs on the next flush; if
+        // `sprintStore` doesn't hold the sprint yet it resets `activeSprint`
+        // and bounces us straight back to the gate. `reload` is async and
+        // fire-and-forget, so it can't be relied on to land first.
+        sprintStore.update((list: Sprint[]) =>
+          list.some(s => s.id === created.id) ? list : [...list, created]);
         dispatch('reload');
         // Enter the freshly-created workspace immediately.
         dispatch('select', created.id);
@@ -77,6 +121,20 @@
     </header>
 
     <div class="grid">
+      {#if showUnsorted}
+        <button class="sprint-card" class:active={activeSprint === UNSORTED} on:click={() => pick(UNSORTED)}>
+          <div class="card-top">
+            <span class="dot" style="background:var(--surface-3)"></span>
+            <span class="s-name">Unsorted</span>
+            <span class="s-status">no sprint</span>
+          </div>
+          <div class="s-goal">Tickets that don't belong to any sprint yet.</div>
+          <div class="card-foot">
+            <span class="mono">{unsortedCount} tickets</span>
+            {#if activeSprint === UNSORTED}<span class="cur">current</span>{/if}
+          </div>
+        </button>
+      {/if}
       {#each ordered as s (s.id)}
         <button class="sprint-card" class:active={s.id === activeSprint} on:click={() => pick(s.id)}>
           <div class="card-top">
@@ -88,7 +146,7 @@
             <div class="s-goal">{s.goal}</div>
           {/if}
           <div class="card-foot">
-            <span class="mono">{counts.get(s.id) || 0} tickets</span>
+            <span class="mono">{bySprint[s.id] || 0} tickets</span>
             {#if s.id === activeSprint}<span class="cur">current</span>{/if}
           </div>
         </button>
@@ -112,7 +170,10 @@
     </div>
 
     {#if sprints.length === 0 && !creating}
-      <div class="empty-hint">No sprints yet — create your first to open the board.</div>
+      <div class="empty-hint">
+        No sprints yet — create your first to open the board.
+        {#if showUnsorted}Existing tickets stay reachable under <strong>Unsorted</strong> until you file them into one.{/if}
+      </div>
     {/if}
   </div>
 </div>

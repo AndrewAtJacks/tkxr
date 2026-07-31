@@ -67,7 +67,8 @@ mutate the project state without shelling out.
   estimate (story points), assignee (User id), sprint (Sprint id), epic (Epic id), labels[].
 - **Sprint**: id (\`spr-*\`), name, description, goal, status ∈ {planning, active, completed},
   startDate, endDate. A sprint is the **top-level frame that wraps the whole workspace** —
-  the board view is scoped to a single active sprint.
+  the board view is scoped to a single active sprint. Tickets with no sprint live in the
+  web UI's "Unsorted" workspace; \`sprint: "none"\` is the filter for them.
 - **Epic**: id (\`epi-*\`), name, description, goal, color, status ∈ {planning, active, completed},
   sprint (Sprint id). Epics are the **mid-level grouping of tickets within a sprint** — they
   replace the role sprints used to play for bucketing tasks/bugs.
@@ -98,11 +99,12 @@ mutate the project state without shelling out.
 - \`create_user\` / \`edit_user\` — people.
 
 ## Read tools
-- \`get_ticket\` returns \`{ ticket, comments, assignee, sprint }\` — richer than
-  \`list_tickets\`, use it whenever you need the description.
+- \`get_ticket\` returns \`{ ticket, comments, assignee, sprint, epic, dependencies, blockedBy }\`
+  — richer than \`list_tickets\`, use it whenever you need the description.
 - \`list_tickets\` returns an array of ticket objects (no comments). Supports filters:
   \`type\`, \`status\`, \`priority\`, \`assignee\`, \`sprint\`, \`sprintName\`, \`hasSprint\`,
-  \`limit\`, \`sortBy\`.
+  \`epic\`, \`limit\`, \`sortBy\`. \`assignee\`, \`sprint\`, and \`epic\` each accept the
+  literal \`none\` to match rows with that field unset.
 - \`search_tickets\` runs a case-insensitive substring search over title, description,
   and comment bodies; returns tickets ranked by match count.
 

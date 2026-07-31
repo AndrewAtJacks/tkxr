@@ -204,6 +204,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
   const VALID_SORT_BY = new Set<TicketSortBy>(['updated', 'created', 'priority', 'title']);
   const VALID_TYPES = new Set(['task', 'bug']);
   const VALID_STATUSES = new Set(['backlog', 'progress', 'review', 'blocked', 'done']);
+  const VALID_EPIC_STATUSES = new Set(['planning', 'active', 'completed']);
 
   app.get('/api/tickets', async (req, res) => {
     try {
@@ -273,11 +274,24 @@ export async function startServer(args: ServeArgs): Promise<void> {
   // Registered BEFORE `/api/tickets/:type` so Express doesn't route `summary`
   // into the type handler (which only accepts 'task' | 'bug').
   // See tas-4MNJ9qP5.
+  //
+  // Now that a sprint frames the whole workspace (tas-hr2pCGjr), an unscoped
+  // project-wide total contradicts the workspace-scoped board sitting next to
+  // it. `?sprint=<id>` (or the literal `none`) scopes `counts`/`triage`/
+  // `byStatus`/`byEpic`/`byAssignee` to that workspace. `bySprint` is always
+  // project-wide — the sprint switcher needs cross-workspace totals.
   app.get('/api/tickets/summary', async (req, res) => {
     try {
       // Reload from disk so we agree with whatever `/api/tickets` last read.
       await storage.loadProject();
-      const tickets = await storage.getAllTickets();
+      const all = await storage.getAllTickets();
+
+      const sprintScope = typeof req.query.sprint === 'string' && req.query.sprint.length > 0
+        ? req.query.sprint
+        : null;
+      const tickets = sprintScope === null
+        ? all
+        : all.filter(t => (sprintScope === 'none' ? !t.sprint : t.sprint === sprintScope));
 
       const byStatus: Record<'backlog' | 'progress' | 'review' | 'blocked' | 'done', number> = {
         backlog: 0,
@@ -288,6 +302,10 @@ export async function startServer(args: ServeArgs): Promise<void> {
       };
       let unassignedOpen = 0;
       let criticalOpen = 0;
+      // `none` is a reserved bucket key in both maps, matching the `none`
+      // sentinel the ticket query filters already use.
+      const byEpic: Record<string, number> = { none: 0 };
+      const byAssignee: Record<string, number> = { none: 0 };
 
       for (const t of tickets) {
         // Defensive: unknown statuses just don't get counted in byStatus.
@@ -297,6 +315,18 @@ export async function startServer(args: ServeArgs): Promise<void> {
         const isOpen = t.status !== 'done';
         if (isOpen && !t.assignee) unassignedOpen++;
         if (isOpen && t.priority === 'critical') criticalOpen++;
+        const epicKey = t.epic || 'none';
+        byEpic[epicKey] = (byEpic[epicKey] || 0) + 1;
+        const asgKey = t.assignee || 'none';
+        byAssignee[asgKey] = (byAssignee[asgKey] || 0) + 1;
+      }
+
+      // Project-wide sprint buckets for the workspace picker — deliberately
+      // computed over `all`, not the scoped slice.
+      const bySprint: Record<string, number> = { none: 0 };
+      for (const t of all) {
+        const key = t.sprint || 'none';
+        bySprint[key] = (bySprint[key] || 0) + 1;
       }
 
       const total = tickets.length;
@@ -307,7 +337,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
         backlogCount: byStatus.backlog,
       };
 
-      res.json({ counts, triage, byStatus });
+      res.json({ counts, triage, byStatus, byEpic, byAssignee, bySprint });
     } catch (error) {
       res.status(500).json({ error: 'Failed to load ticket summary' });
     }
@@ -377,7 +407,14 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (rest.description) opts.description = rest.description;
       if (rest.goal) opts.goal = rest.goal;
       if (rest.color) opts.color = rest.color;
-      if (rest.status) opts.status = rest.status;
+      if (rest.status) {
+        if (!VALID_EPIC_STATUSES.has(rest.status)) {
+          return res.status(400).json({
+            error: { code: 'bad_input', message: `status must be one of ${[...VALID_EPIC_STATUSES].join(', ')}` },
+          });
+        }
+        opts.status = rest.status;
+      }
       if (rest.sprint) opts.sprint = rest.sprint;
       const epic = await storage.createEpic(name, opts);
       broadcast(wss, { type: 'epic_created', data: epic });
@@ -390,7 +427,25 @@ export async function startServer(args: ServeArgs): Promise<void> {
   app.put('/api/epics/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const updates = req.body || {};
+      // Whitelist the patch fields the way `/api/sprints/:id` does. `req.body`
+      // is `any` at this boundary, so without this a client could overwrite
+      // `id`/`createdAt`, inject arbitrary keys into epics.json, or set a
+      // status outside `EpicStatus`.
+      const { name, description, goal, status, color, sprint } = req.body || {};
+      const updates: any = {};
+      if (name !== undefined) updates.name = name;
+      if (description !== undefined) updates.description = description;
+      if (goal !== undefined) updates.goal = goal;
+      if (color !== undefined) updates.color = color;
+      if (sprint !== undefined) updates.sprint = sprint || undefined;
+      if (status !== undefined) {
+        if (!VALID_EPIC_STATUSES.has(status)) {
+          return res.status(400).json({
+            error: { code: 'bad_input', message: `status must be one of ${[...VALID_EPIC_STATUSES].join(', ')}` },
+          });
+        }
+        updates.status = status;
+      }
       const epic = await storage.updateEpic(id, updates);
       if (!epic) {
         return res.status(404).json({ error: 'Epic not found' });
