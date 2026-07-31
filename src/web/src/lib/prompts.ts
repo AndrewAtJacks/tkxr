@@ -89,7 +89,84 @@ function compactTicket(t: Ticket, users: User[], sprints: Sprint[], allTickets?:
   return out;
 }
 
+/**
+ * Code review prompt for tickets sitting in `review` (tas-MvL7qIcv).
+ *
+ * A ticket in review means the implementation is supposed to be finished, so the
+ * agent's job is to *review* — read the diff, judge it against the ticket, write
+ * the findings back as a ticket comment, and bounce the ticket to `progress` if
+ * anything is outstanding. It must not implement fixes itself.
+ */
+export function codeReviewTicketPrompt(ticket: Ticket, users: User[], sprints: Sprint[], allTickets: Ticket[] = []): string {
+  const ctx = compactTicket(ticket, users, sprints, allTickets);
+  const id = ticket.id;
+  const wtPath = ticket.worktree?.path;
+  const wtBranch = ticket.worktree?.branch;
+
+  const lines: string[] = [
+    `# tkxr — Code review ticket ${id}`,
+    ``,
+    `This ticket is **in review**: the implementation is supposed to be done. You are the reviewer. Read the code, judge it against the ticket, and write your findings back onto the ticket.`,
+    ``,
+    `**You do NOT write the fix.** No implementation, no refactors, no commits, no pushes, no status flips to \`done\` on work you haven't actually verified. If the change needs more work, hand it back to the implementer via the ticket.`,
+    ``,
+  ];
+
+  if (wtPath && wtBranch) {
+    lines.push(
+      `**Worktree:** \`${wtPath}\` on branch \`${wtBranch}\`. \`cd\` there — that's the checkout holding the work under review.`,
+      ``,
+    );
+  } else {
+    lines.push(
+      `**No worktree recorded on this ticket.** Review whatever landed in the current checkout: find the relevant work via \`git log --oneline --all --grep "${id}"\`, recent commits, and the ticket's comment history. If you can't locate the change at all, say so in a comment instead of guessing.`,
+      ``,
+    );
+  }
+
+  lines.push(
+    `## Suggested flow`,
+    ``,
+    `1. Fetch latest state — \`get_ticket\` with \`id: "${id}"\`. Read the description AND every comment: acceptance criteria live there, as does whatever the implementer says they did.`,
+    `2. Locate the change set:`,
+    wtPath
+      ? `   - \`cd\` into \`${wtPath}\`, then \`git status\`, \`git log --oneline main..HEAD\`, \`git diff main...HEAD\`. Swap \`main\` for whatever this branch was cut from if that's not it (\`git merge-base --fork-point\` / the sprint branch).`
+      : `   - \`git log --oneline --all --grep "${id}"\`, plus \`git status\` / \`git diff\` for anything uncommitted.`,
+    `   - Note any **uncommitted** changes — they're part of the review, and they're a finding in themselves (the work isn't landed yet).`,
+    `3. Review all related code — not only the diff hunks. Open the files the diff touches, and follow the call sites, tests, types, and docs the change implies. Check for:`,
+    `   - **Correctness** — does it actually do what the ticket asked? Edge cases, error paths, async/await, null handling.`,
+    `   - **Completeness** — is any part of the ticket's scope missing or silently narrowed?`,
+    `   - **Regressions** — callers/consumers not updated, changed contracts, removed behavior others depend on.`,
+    `   - **Fit with the codebase** — matches surrounding conventions, naming, structure; no stray debug code, dead code, or commented-out blocks.`,
+    `   - **Tests / verification** — is there any way to verify it? Run the project's typecheck/tests/build if cheap (see package.json scripts) and report the result.`,
+    `   - **Security & data safety** — injection, path traversal, secrets in code, unguarded destructive operations.`,
+    `4. Post the review — ONE \`add_comment\` on ${id}, structured like:`,
+    `   - A one-line verdict: **approve** / **changes requested**.`,
+    `   - What you reviewed (branch, commit range or file list) and what you ran to verify.`,
+    `   - **Blocking findings** — numbered, each with \`file:line\`, what's wrong, and what should change. Be specific enough that the implementer can act without re-deriving your reasoning.`,
+    `   - **Non-blocking nits** — clearly separated, so nobody treats them as gates.`,
+    `   - If you found nothing, say that plainly rather than inventing filler feedback.`,
+    `5. Set the status:`,
+    `   - **Outstanding changes** (anything blocking, including "the work isn't committed yet") → \`update_ticket_status\` with \`{ id: "${id}", status: "progress" }\` so it goes back to the implementer.`,
+    `   - **Clean** → \`update_ticket_status\` with \`{ id: "${id}", status: "done" }\`.`,
+    `   - **Can't tell** (missing context, can't find the change, ambiguous acceptance criteria) → leave the status at \`review\` and ask the question in your comment.`,
+    ``,
+    `## Ticket context`,
+    '```json',
+    JSON.stringify(ctx, null, 2),
+    '```',
+    ``,
+    MCP_REMINDER,
+  );
+
+  return lines.join('\n');
+}
+
 export function workOnTicketPrompt(ticket: Ticket, users: User[], sprints: Sprint[], allTickets: Ticket[] = []): string {
+  // Tickets in review get the code-review prompt, no matter which entry point
+  // asked to "work on" them — the work is meant to be finished by then (tas-MvL7qIcv).
+  if (ticket.status === 'review') return codeReviewTicketPrompt(ticket, users, sprints, allTickets);
+
   const ctx = compactTicket(ticket, users, sprints, allTickets);
   const noDescription = !ticket.description || !ticket.description.trim();
   const id = ticket.id;
@@ -168,15 +245,6 @@ export function workOnTicketPrompt(ticket: Ticket, users: User[], sprints: Sprin
       `4. When done — call \`update_ticket_status\` with \`status: "review"\` (or \`"done"\` if there's nothing to review), then \`add_comment\` summarising what you did + how to verify.`,
       `5. If you hit a blocker — \`update_ticket_status\` \`status: "blocked"\` + \`add_comment\` explaining what's needed.`,
     ],
-    review: [
-      `This ticket is **in review** — the goal here is to verify the work matches the ticket, not to reimplement. Suggested flow:`,
-      ``,
-      `1. Fetch latest state — call \`get_ticket\` with \`id: "${id}"\` and read the last comment(s) to see what the implementer says they did.`,
-      `2. Check the actual repo — does the change work, is it complete, is it correct?`,
-      `3. If it looks good — call \`update_ticket_status\` with \`{ id: "${id}", status: "done" }\` + \`add_comment\` noting what you verified.`,
-      `4. If it needs more work — call \`update_ticket_status\` with \`status: "progress"\` + \`add_comment\` describing what's missing.`,
-      `5. If something is unclear — \`add_comment\` asking the question; leave the status alone.`,
-    ],
     blocked: [
       `This ticket is **blocked**. Read the comment history first to understand the block before assuming you can just work on it. Suggested flow:`,
       ``,
@@ -187,64 +255,10 @@ export function workOnTicketPrompt(ticket: Ticket, users: User[], sprints: Sprin
     ],
   };
 
-  lines.push(...flowByStatus[ticket.status], ``);
-  if (ticket.status !== 'review') {
-    // Reviewers verify, they don't commit — the convention block is only relevant
-    // to the flows that will actually produce commits.
-    lines.push(CONVENTIONAL_COMMIT_GUIDE, ``);
-  }
+  // `review` is absent by design — it short-circuits to codeReviewTicketPrompt above.
+  lines.push(...(flowByStatus[ticket.status] || flowByStatus.backlog), ``);
+  lines.push(CONVENTIONAL_COMMIT_GUIDE, ``);
   lines.push(
-    `## Ticket context`,
-    '```json',
-    JSON.stringify(ctx, null, 2),
-    '```',
-    ``,
-    MCP_REMINDER,
-  );
-
-  return lines.join('\n');
-}
-
-export function commitTicketPrompt(ticket: Ticket, users: User[], sprints: Sprint[], allTickets: Ticket[] = []): string {
-  const ctx = compactTicket(ticket, users, sprints, allTickets);
-  const id = ticket.id;
-  const wtPath = ticket.worktree?.path;
-  const wtBranch = ticket.worktree?.branch;
-
-  const lines: string[] = [
-    `# tkxr — Commit review work for ticket ${id}`,
-    ``,
-    `This ticket is in **review**. Your job: stage the correct changes on its worktree and land ONE Conventional Commit summarising the work. No new implementation, no refactors — just a commit.`,
-    ``,
-  ];
-
-  if (wtPath && wtBranch) {
-    lines.push(
-      `**Worktree:** \`${wtPath}\` on branch \`${wtBranch}\`. \`cd\` there before running any git command — commits MUST land on this branch, not the parent checkout.`,
-      ``,
-    );
-  } else {
-    lines.push(
-      `**No worktree recorded on this ticket.** Before committing, ask the user which working tree to commit in — do NOT commit into the shared main checkout without confirmation.`,
-      ``,
-    );
-  }
-
-  lines.push(
-    `## Suggested flow`,
-    ``,
-    `1. \`cd\` into the ticket worktree${wtPath ? ` (\`${wtPath}\`)` : ''}.`,
-    `2. \`git status\` and \`git diff\` (plus \`git diff --staged\`) to inventory what actually changed. If there is nothing to commit, STOP: \`add_comment\` on the ticket saying the tree is clean and return control — don't create an empty commit.`,
-    `3. Determine the scope: which directory/subsystem dominates the diff? That's your \`<scope>\`. If changes are split, pick the most representative and mention the others in the body.`,
-    `4. Stage the correct files — prefer \`git add <path>...\` over \`git add -A\`. Skip unrelated cruft (editor swap files, .env, node_modules diff noise). If unrelated changes exist, leave them unstaged and mention it in the ticket comment (step 8).`,
-    `5. Craft the commit message per the convention below. Type comes from the ticket + diff (\`task\` → \`feat\` unless the diff says otherwise; \`bug\` → \`fix\`). Subject is imperative, ≤72 chars including \`<type>(<scope>): \` and the trailing \`(${id})\`.`,
-    `6. Body: one short paragraph explaining WHY, sourced from the ticket description — not a diff summary. Wrap at ~72 cols. No "Generated with…" trailer.`,
-    `7. Run \`git commit -m "<subject>" -m "<body>"\` (use two \`-m\` flags so subject/body separate cleanly; use a single-quoted PowerShell here-string \`@'…'@\` on Windows if the body has special chars). Do NOT push, do NOT merge, do NOT amend anything already on the branch.`,
-    `8. On success: \`add_comment\` on ${id} with the commit subject + short hash (from \`git rev-parse --short HEAD\`) so the reviewer can find it. Leave status as \`review\` — the human decides when to mark \`done\`.`,
-    `9. On any failure (hook rejects, pre-commit lint, etc.): do NOT bypass with \`--no-verify\`. Fix the underlying issue if trivial, otherwise \`update_ticket_status\` to \`blocked\` + \`add_comment\` naming the exact failure.`,
-    ``,
-    CONVENTIONAL_COMMIT_GUIDE,
-    ``,
     `## Ticket context`,
     '```json',
     JSON.stringify(ctx, null, 2),

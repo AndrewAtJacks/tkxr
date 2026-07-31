@@ -167,6 +167,19 @@ see the migration note under _Changed_.
   epic exists so the target is always reachable.
 - `--goal` and `--color` on `tkxr create epic` are documented in
   `--help` and the README, and echoed back on create.
+- **In-review tickets get a code review, not more work.** The ticket panel's
+  agent actions used to offer "Work on this" and "Commit with Claude" while a
+  ticket sat in `review` — both assume the implementation is unfinished. A
+  ticket in review is supposed to be done, so those are replaced by a single
+  **Code review this** action backed by a new `codeReviewTicketPrompt`. The
+  prompt tells the agent to read the full change set (worktree diff, or commits
+  matched by ticket id when there's no worktree), review the related code —
+  correctness, completeness, regressions, conventions, tests, security — post
+  one structured `add_comment` with a verdict plus `file:line` findings, and
+  then set the status: back to `progress` when anything is outstanding, `done`
+  when clean, unchanged when it can't tell. It explicitly must not implement
+  the fix or commit. `workOnTicketPrompt` now short-circuits to the same prompt
+  for `review` tickets, so every entry point agrees.
 
 ### Fixed
 - **CLI notifications 404'd for three mutations.** `notifier` called
@@ -188,6 +201,11 @@ see the migration note under _Changed_.
 - **`tkxr list -v` printed the version instead of a verbose listing.**
   The global version flag swallowed `-v` before subcommands saw it.
   `-v` is now the version alias only for a bare `tkxr -v`.
+
+### Removed
+- `commitTicketPrompt` (ticket-level "Commit with Claude"). Committing belongs
+  to the implementer before the ticket reaches review; the sprint-level
+  `commitSprintPrompt` is unchanged.
 
 ## [2.1.4] - 2026-07-16
 ### Changed
