@@ -140,7 +140,10 @@
 
   async function deleteSprint() {
     if (!sprint) return;
-    if (!confirm('Delete this sprint?')) return;
+    // A sprint frames the whole workspace now, so deleting one doesn't just
+    // untag its tickets — it moves them out of every sprint view. Say where
+    // they land (tas-hr2pCGjr).
+    if (!confirm('Delete this sprint?\n\nIts tickets and epics are not deleted — they move to the "Unsorted" workspace, reachable from the sprint switcher.')) return;
     try {
       const res = await fetch(`/api/sprints/${sprint.id}`, { method: 'DELETE' });
       if (res.ok) {
