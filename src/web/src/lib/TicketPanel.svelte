@@ -3,6 +3,7 @@
   import { claudeConfig, type Sprint, type Ticket, type TicketComment, type User } from './stores';
   import { avatarColorFor, initials, normalizeTicket, PRIORITY_META, relativeTime, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
   import { copyToClipboard, showToast } from './clipboard';
+  import CopyId from './CopyId.svelte';
   import { runPrompt } from './claudeRun';
   import { currentUserId } from './currentUser';
   import { commitTicketPrompt, ticketAskPrompt, workOnTicketPrompt } from './prompts';
@@ -399,7 +400,11 @@
 </script>
 
 <header class="head">
-  <span class="mono id">{isCreate ? 'NEW TICKET' : ticket?.id}</span>
+  {#if isCreate || !ticket?.id}
+    <span class="mono id">NEW TICKET</span>
+  {:else}
+    <span class="id"><CopyId value={ticket.id} label="Ticket ID" grow /></span>
+  {/if}
   {#if prio}
     <span class="prio" style="background:{prio.bg};color:{prio.color}">{prio.label}</span>
   {/if}
