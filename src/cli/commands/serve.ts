@@ -383,13 +383,18 @@ export async function startServer(args: ServeArgs): Promise<void> {
 
   // --- Epics ----------------------------------------------------------------
   // Epics are the mid-level grouping of tickets within a sprint/workspace.
-  // Optional `?sprint=<id>` scopes the list to a single workspace.
+  // Optional `?sprint=<id>` scopes the list to a single workspace; `none`
+  // selects the sprintless epics (the Unsorted workspace), matching the
+  // sentinel `/api/tickets` and `tkxr epics --sprint` already honour.
   app.get('/api/epics', async (req, res) => {
     try {
       await storage.loadProject();
       let epics = await storage.getEpics();
-      if (typeof req.query.sprint === 'string' && req.query.sprint.length > 0) {
-        epics = epics.filter(e => e.sprint === req.query.sprint);
+      const sprintQ = req.query.sprint;
+      if (typeof sprintQ === 'string' && sprintQ.length > 0) {
+        epics = sprintQ === 'none'
+          ? epics.filter(e => !e.sprint)
+          : epics.filter(e => e.sprint === sprintQ);
       }
       res.json(epics);
     } catch (error) {

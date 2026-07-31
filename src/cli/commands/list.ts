@@ -173,7 +173,15 @@ export async function listTickets(args: ListArgs): Promise<void> {
       
       case 'epics':
       case 'epic': {
-        const allEpics = await storage.getEpics();
+        // Mirrors `tkxr epics` — honour --sprint (incl. the `none` sentinel)
+        // and --status so the two epic listings don't diverge.
+        let allEpics = await storage.getEpics();
+        if (args.sprint) {
+          allEpics = args.sprint === 'none'
+            ? allEpics.filter((e: Epic) => !e.sprint)
+            : allEpics.filter((e: Epic) => e.sprint === args.sprint);
+        }
+        if (args.status) allEpics = allEpics.filter((e: Epic) => e.status === args.status);
 
         if (allEpics.length === 0) {
           console.log(chalk.yellow('No epics found'));
@@ -279,7 +287,6 @@ function filterTickets(tickets: Ticket[], args: ListArgs): Ticket[] {
       const matches = args.epic === 'none' ? !ticket.epic : ticket.epic === args.epic;
       if (!matches) return false;
     }
-
 
     // Search functionality
     const searchTerm = args.search || args.s;

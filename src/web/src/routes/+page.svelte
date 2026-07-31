@@ -573,7 +573,6 @@
         {isCreate}
         sprintId={activeSprint && !isUnsorted ? activeSprint : null}
         sprints={$sprintStore}
-        tickets={$ticketStore}
         on:reload={reload}
         on:close={closePanel}
         on:openTicket={(e) => openTicket(e.detail)}
