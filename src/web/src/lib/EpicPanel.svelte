@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import type { Epic, Sprint, Ticket } from './stores';
+  import { normalizeTicket } from './util';
+  import { onTicketEvent } from './ticketEvents';
   import CopyId from './CopyId.svelte';
   import X from './icons/X.svelte';
 
@@ -10,7 +12,6 @@
   export let sprintId: string | null = null;
   /** All sprints — backs the "move this epic to another workspace" selector. */
   export let sprints: Sprint[] = [];
-  export let tickets: Ticket[] = [];
 
   const dispatch = createEventDispatcher();
 
@@ -34,9 +35,45 @@
     if (!isCreate) schedulePatch({ sprint: v || null });
   }
 
-  $: scoped = epic ? tickets.filter(t => t.epic === epic!.id) : [];
+  // The board's ticket store is workspace-scoped, epic-filtered and paged, so
+  // it can't back these numbers — filtering to epic B and opening epic A's
+  // panel would render A as empty. Fetch our own slice instead, the way
+  // SprintPanel does (tas-hr2pCGjr).
+  let scoped: Ticket[] = [];
+  let scopedAbort: AbortController | null = null;
+
   $: totalPts = scoped.reduce((s, t) => s + (t.estimate || 0), 0);
   $: donePts = scoped.filter(t => t.status === 'done').reduce((s, t) => s + (t.estimate || 0), 0);
+
+  async function fetchEpicTickets() {
+    if (!epic || isCreate) return;
+    if (scopedAbort) scopedAbort.abort();
+    const ac = new AbortController();
+    scopedAbort = ac;
+    try {
+      const res = await fetch(`/api/tickets?epic=${encodeURIComponent(epic.id)}&limit=200`, { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      scoped = items.map(normalizeTicket);
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+      // noop — panel stays usable with stale data
+    } finally {
+      if (scopedAbort === ac) scopedAbort = null;
+    }
+  }
+
+  onMount(() => {
+    fetchEpicTickets();
+    // Keep the list live for as long as the panel is open; the shared bus
+    // closes the socket once the last subscriber unsubscribes.
+    const off = onTicketEvent(() => fetchEpicTickets());
+    return () => {
+      off();
+      if (scopedAbort) scopedAbort.abort();
+    };
+  });
 
   function schedulePatch(patch: any) {
     if (!epic || isCreate) return;

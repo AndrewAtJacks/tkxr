@@ -265,7 +265,15 @@ tkxr epic edit epi-abc12345 --clear-sprint
 tkxr epic set tas-abc12345 epi-abc12345               # attach ticket to epic
 tkxr epic set tas-abc12345 --unset                    # ungroup
 tkxr delete epi-abc12345 --force                      # ungroups its tickets, keeps them
+
+tkxr create epic "Auth" --sprint spr-abc12345         # alias for `epic create`
+tkxr list epics --sprint none --status active         # same filters as `tkxr epics`
 ```
+
+`--sprint` and `--epic` are validated on every path that accepts them (`create`,
+`edit`, `epic create`, `epic edit`). A dangling reference would silently hide the
+entity — the board is scoped to one sprint, and a ticket pointing at an unknown
+epic shows under neither that epic nor **No epic** — so unknown ids exit `1`.
 
 `epic set` warns when the ticket's sprint differs from the epic's — the board is
 sprint-scoped, so such a ticket would not appear under the epic you filed it in.
@@ -513,7 +521,7 @@ PUT    /api/sprints/:id/status
 DELETE /api/sprints/:id
 
 # Epics
-GET    /api/epics                        (?sprint=<id> to scope to one workspace)
+GET    /api/epics                        (?sprint=<id>, or none, to scope to one workspace)
 POST   /api/epics
 PUT    /api/epics/:id
 DELETE /api/epics/:id

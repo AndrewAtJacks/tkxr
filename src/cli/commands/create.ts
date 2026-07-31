@@ -32,15 +32,42 @@ export async function createTicket(args: CreateArgs): Promise<void> {
 
   const storage = await createStorage();
 
+  // A dangling sprint or epic ref doesn't error anywhere downstream, it just
+  // hides the entity: the board is sprint-scoped, and a ticket with an unknown
+  // epic shows under no epic *and* not under "No epic" (that row keys off a
+  // falsy `epic`). Resolve refs up front, like the edit paths do.
+  async function resolveSprint(id: string): Promise<string> {
+    const sprint = (await storage.getSprints()).find((s: { id: string }) => s.id === id);
+    if (!sprint) {
+      console.log(chalk.red(`Error: Sprint "${id}" not found.`));
+      console.log(chalk.gray('Run "tkxr sprints" to see available sprints.'));
+      process.exit(1);
+    }
+    return sprint.id;
+  }
+
+  async function resolveEpic(id: string): Promise<string> {
+    const epic = (await storage.getEpics()).find((e: { id: string }) => e.id === id);
+    if (!epic) {
+      console.log(chalk.red(`Error: Epic "${id}" not found.`));
+      console.log(chalk.gray('Run "tkxr epics" to see available epics.'));
+      process.exit(1);
+    }
+    return epic.id;
+  }
+
   try {
     switch (entityType) {
       case 'task':
       case 'bug': {
+        const sprintId = args.sprint ? await resolveSprint(String(args.sprint)) : undefined;
+        const epicId = args.epic ? await resolveEpic(String(args.epic)) : undefined;
+
         const ticket = await storage.createTicket(entityType as TicketType, title, {
           description: args.description,
           assignee: args.assignee,
-          sprint: args.sprint,
-          epic: args.epic,
+          sprint: sprintId,
+          epic: epicId,
           priority: args.priority as any,
           estimate: args.estimate ? parseInt(args.estimate) : undefined,
         });
@@ -74,9 +101,11 @@ export async function createTicket(args: CreateArgs): Promise<void> {
       }
       
       case 'epic': {
+        const sprintId = args.sprint ? await resolveSprint(String(args.sprint)) : undefined;
+
         const epic = await storage.createEpic(title, {
           description: args.description,
-          sprint: args.sprint,
+          sprint: sprintId,
           goal: args.goal,
           color: args.color,
         });
@@ -89,6 +118,11 @@ export async function createTicket(args: CreateArgs): Promise<void> {
         console.log(`  Status: ${epic.status}`);
         console.log(`  Sprint: ${epic.sprint || 'none'}`);
         if (epic.description) console.log(`  Description: ${epic.description}`);
+        if (!epic.sprint) {
+          console.log();
+          console.log(chalk.dim('Note: this epic has no sprint, so it only shows in the Unsorted workspace.'));
+          console.log(chalk.dim(`Attach it with: tkxr epic edit ${epic.id} --sprint <sprint-id>`));
+        }
         break;
       }
 
