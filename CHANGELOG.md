@@ -1,5 +1,70 @@
 # Changelog
 
+## [Unreleased]
+
+Sprints change role: a sprint now frames the whole workspace instead of
+being one grouping among many, and **epics** take over the job of
+grouping tickets inside it. This changes what you see on first load —
+see the migration note under _Changed_.
+
+### Added
+- **Epic entity (`epi-*`).** New top-level record in `tkxr/epics.json`
+  with `name`, `description`, `goal`, `color`, `status`
+  (`planning | active | completed`) and an owning `sprint`. `Ticket`
+  gains an `epic` field. Deleting an epic ungroups its tickets rather
+  than deleting them; deleting a sprint detaches its epics instead of
+  cascading.
+- **Sprint switcher.** Picking a workspace is its own full view now,
+  not an inline toolbar filter. Reached from the sidebar "Switch"
+  button, and shown as a gate when no workspace is active.
+- **Unsorted workspace.** A pseudo-workspace backed by the existing
+  `sprint=none` sentinel. Appears in the switcher whenever sprintless
+  tickets exist, so nothing is stranded by the new gate.
+- **Epics in the sidebar.** Replaces the old sprint list. Epic rows
+  filter the board, carry a done/total badge sourced from the scoped
+  `/api/tickets/summary`, and accept a dragged ticket to assign it.
+  `EpicPanel` handles epic CRUD and shows the epic's ticket count,
+  points done and ticket list from its own scoped fetch; board cards
+  and list rows show a colored epic chip.
+- **Epic REST surface.** `GET/POST /api/epics` and
+  `PUT/DELETE /api/epics/:id`, broadcasting `epic_created` /
+  `epic_updated` / `epic_deleted`. `GET /api/epics` accepts
+  `?sprint=<id>` or `?sprint=none`. `GET /api/tickets` accepts
+  `?epic=<id>` or `?epic=none`.
+- **Epic CLI.** `tkxr epics [--sprint <id>|none] [--status …]`;
+  `tkxr epic create|status|set|edit` and `tkxr create epic <name>`;
+  `--epic <id>|none` on `tkxr list`; a `tkxr list epics` entity type;
+  `--epic` on `tkxr create` and `tkxr edit` (plus `--clear-epic`);
+  `tkxr show <epi-*>`; and `tkxr delete <epi-*>`, which reports the
+  tickets it ungrouped. CLI epic mutations live-refresh an open board
+  through new `/api/cli-notifications/epic-*` endpoints.
+- **Epic MCP tools.** `list_epics`, `get_epic`, `create_epic`,
+  `edit_epic`, `delete_epic`, `set_ticket_epic`. `epic` accepted on
+  `create_ticket` / `edit_ticket` and resolved by `get_ticket`.
+
+### Changed
+- **A sprint is now required to enter the board.** With no active
+  workspace you land on the switcher instead of an unscoped ticket
+  list, and the board, sidebar counts and `/api/tickets/summary` are
+  all scoped to the active sprint. _Migration:_ nothing is rewritten on
+  disk. Tickets that already have a sprint open under it; tickets
+  without one are reachable through the **Unsorted** workspace, which
+  the switcher offers automatically whenever any exist. Existing
+  sprints all appear in the switcher.
+- **Deleting a sprint** now says where its tickets and epics go — the
+  Unsorted workspace — since under the new model detaching them moves
+  them out of every sprint view rather than just clearing a tag.
+- `PUT /api/epics/:id` whitelists its updatable fields and validates
+  `status`, matching the sprint route.
+- `--sprint` and `--epic` are validated on every CLI path that accepts
+  them. A dangling reference surfaces no error anywhere downstream, it
+  just hides the entity, so unknown ids now exit `1`.
+
+### Fixed
+- **`tkxr list -v` printed the version instead of a verbose listing.**
+  The global version flag swallowed `-v` before subcommands saw it.
+  `-v` is now the version alias only for a bare `tkxr -v`.
+
 ## [2.1.4] - 2026-07-16
 ### Changed
 - Patch version bumped automatically during build.
