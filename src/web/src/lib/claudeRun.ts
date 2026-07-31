@@ -23,6 +23,7 @@ import { browser } from '$app/environment';
 import { claudeConfig } from './stores';
 import { claudeAvailable } from './settings';
 import { copyPrompt, showToast } from './clipboard';
+import { withExecutionDirective } from './prompts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -300,7 +301,11 @@ export async function runPrompt(prompt: string, opts: RunPromptOptions = {}): Pr
     res = await fetch('/api/claude/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, cwd: opts.cwd, runId, label }),
+      // The headless execution directive is attached HERE and nowhere else —
+      // every clipboard path below/above copies the bare prompt, which lands in
+      // an interactive session where a human can approve tools and answer
+      // questions (tas-abV4MtD8).
+      body: JSON.stringify({ prompt: withExecutionDirective(prompt), cwd: opts.cwd, runId, label }),
     });
   } catch (err) {
     return failLocal(runId, cfg, prompt, label, err instanceof Error ? err.message : String(err), /*flipStore*/ false);

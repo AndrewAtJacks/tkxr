@@ -40,19 +40,29 @@ export const CONVENTIONAL_COMMIT_GUIDE = [
   `Merges (orchestrator + sprint integration): use \`chore(merge): <ticket-id> <short title>\` as the merge subject. Keep \`--no-ff\`.`,
 ].join('\n');
 
-// Prepended to every prompt this module emits. Keeps the CLI from stalling on
-// approval / plan-mode gates when the server-side runner is headless. Paired
-// with `--permission-mode bypassPermissions` on the spawn side (bug-I30c9l0_).
+// Prepended ONLY when the prompt is spawned into tkxr's server-side runner
+// (see `runPrompt` in claudeRun.ts). Keeps the CLI from stalling on approval /
+// plan-mode gates when nobody is at a keyboard. Paired with
+// `--permission-mode bypassPermissions` on the spawn side (bug-I30c9l0_).
+//
+// Deliberately NOT part of the prompt bodies below: when the prompt is copied
+// to the clipboard (tas-abV4MtD8) it lands in an interactive Claude session
+// where a human *can* approve tools and answer questions, so the directive is
+// both false and harmful there.
 const EXECUTION_DIRECTIVE = [
   `**Execution mode — READ FIRST.**`,
   `You are running headless inside tkxr's server-side runner. There is no human at a keyboard to approve tool calls or exit plan mode. Rules:`,
   `- Execute directly. Do NOT enter plan mode. Do NOT emit an ExitPlanMode call.`,
   `- Do NOT ask for permission before using tools — you have been granted full permissions for this session.`,
-  `- Do NOT ask clarifying questions unless the prompt itself explicitly tells you to stop and ask (e.g. sprint-plan guardrails). Otherwise make the reasonable call and continue.`,
+  `- Nobody can answer mid-run, so a clarifying question ends the turn. If something is ambiguous, do the parts that don't depend on the answer, state the assumption you made, and put the open question in your final message.`,
   `- When you're done, exit; the transcript is streamed back to the human.`,
 ].join('\n');
 
-function withDirective(body: string): string {
+/**
+ * Attach the headless execution directive to a prompt body. Call this only on
+ * the spawn path — copied/pasted prompts must stay directive-free.
+ */
+export function withExecutionDirective(body: string): string {
   return `${EXECUTION_DIRECTIVE}\n\n---\n\n${body}`;
 }
 
@@ -114,7 +124,7 @@ export function workOnTicketPrompt(ticket: Ticket, users: User[], sprints: Sprin
       ``,
       MCP_REMINDER,
     );
-    return withDirective(lines.join('\n'));
+    return lines.join('\n');
   }
 
   if (ticket.worktree) {
@@ -191,7 +201,7 @@ export function workOnTicketPrompt(ticket: Ticket, users: User[], sprints: Sprin
     MCP_REMINDER,
   );
 
-  return withDirective(lines.join('\n'));
+  return lines.join('\n');
 }
 
 export function commitTicketPrompt(ticket: Ticket, users: User[], sprints: Sprint[], allTickets: Ticket[] = []): string {
@@ -242,7 +252,7 @@ export function commitTicketPrompt(ticket: Ticket, users: User[], sprints: Sprin
     MCP_REMINDER,
   );
 
-  return withDirective(lines.join('\n'));
+  return lines.join('\n');
 }
 
 export function commitSprintPrompt(sprint: Sprint, tickets: Ticket[], users: User[]): string {
@@ -319,12 +329,12 @@ export function commitSprintPrompt(sprint: Sprint, tickets: Ticket[], users: Use
     MCP_REMINDER,
   );
 
-  return withDirective(lines.join('\n'));
+  return lines.join('\n');
 }
 
 export function ticketAskPrompt(question: string, ticket: Ticket, users: User[], sprints: Sprint[], allTickets: Ticket[] = []): string {
   const ctx = compactTicket(ticket, users, sprints, allTickets);
-  return withDirective([
+  return [
     `# tkxr — Ticket question`,
     ``,
     `Ticket \`${ticket.id}\`: **${ticket.title}**`,
@@ -338,7 +348,7 @@ export function ticketAskPrompt(question: string, ticket: Ticket, users: User[],
     '```',
     ``,
     MCP_REMINDER,
-  ].join('\n'));
+  ].join('\n');
 }
 
 export interface TriageScope {
@@ -369,7 +379,7 @@ export function triagePrompt(tickets: Ticket[], users: User[], sprints: Sprint[]
       ? `Scope: assignee @${scope.user.username}.`
       : `Scope: entire open backlog.`;
 
-  return withDirective([
+  return [
     `# tkxr — Triage`,
     ``,
     scopeLine,
@@ -392,7 +402,7 @@ export function triagePrompt(tickets: Ticket[], users: User[], sprints: Sprint[]
     '```',
     ``,
     MCP_REMINDER,
-  ].join('\n'));
+  ].join('\n');
 }
 
 export function orchestrateSprintPrompt(sprint: Sprint, tickets: Ticket[], users: User[]): string {
@@ -428,7 +438,7 @@ export function orchestrateSprintPrompt(sprint: Sprint, tickets: Ticket[], users
   const wtPath = sprint.worktree?.path || '<sprint worktree path>';
   const wtBranch = sprint.worktree?.branch || `tkxr/sprint/${sprint.id}`;
 
-  return withDirective([
+  return [
     `# tkxr — Orchestrate sprint "${sprint.name}" (${sprint.id})`,
     ``,
     `You are the **orchestrator** for this sprint. Your job is not to write code — it is to fan out sub-agents (one per ticket), then merge their branches into the sprint feature branch as they finish. At the end you hand back a single unified branch ready for review.`,
@@ -500,7 +510,7 @@ export function orchestrateSprintPrompt(sprint: Sprint, tickets: Ticket[], users
     '```',
     ``,
     MCP_REMINDER,
-  ].join('\n'));
+  ].join('\n');
 }
 
 export function sprintBreakdownPrompt(sprint: Sprint, existingTickets: Ticket[], users: User[]): string {
@@ -528,7 +538,7 @@ export function sprintBreakdownPrompt(sprint: Sprint, existingTickets: Ticket[],
   const hasWorktree = !!sprint.worktree;
   const wtPath = sprint.worktree?.path || '<sprint worktree path>';
 
-  return withDirective([
+  return [
     `# tkxr — Plan sprint "${sprint.name}" (${sprint.id})`,
     ``,
     `You are the **sprint planner**. Your job is to turn the sprint's goal into a concrete set of child tickets — no code, no status flips on existing work. Just research, then create tickets.`,
@@ -591,7 +601,7 @@ export function sprintBreakdownPrompt(sprint: Sprint, existingTickets: Ticket[],
     '```',
     ``,
     MCP_REMINDER,
-  ].join('\n'));
+  ].join('\n');
 }
 
 export function sprintPlanPrompt(sprints: Sprint[], tickets: Ticket[], users: User[]): string {
@@ -608,7 +618,7 @@ export function sprintPlanPrompt(sprints: Sprint[], tickets: Ticket[], users: Us
     };
   });
   const totalPts = backlog.reduce((s, t) => s + (t.estimate || 0), 0);
-  return withDirective([
+  return [
     `# tkxr — Draft next sprint`,
     ``,
     `Backlog: ${backlog.length} tickets, ${totalPts} pts total.`,
@@ -625,5 +635,5 @@ export function sprintPlanPrompt(sprints: Sprint[], tickets: Ticket[], users: Us
     '```',
     ``,
     MCP_REMINDER,
-  ].join('\n'));
+  ].join('\n');
 }
