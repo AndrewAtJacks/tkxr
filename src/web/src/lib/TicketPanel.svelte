@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
-  import { type Sprint, type Ticket, type TicketComment, type User } from './stores';
+  import { type Epic, type Sprint, type Ticket, type TicketComment, type User } from './stores';
   import { claudeAvailable } from './settings';
   import { avatarColorFor, initials, normalizeTicket, PRIORITY_META, relativeTime, STATUS_COLOR, STATUS_LABEL, STATUS_ORDER } from './util';
   import { copyToClipboard, showToast } from './clipboard';
@@ -15,6 +15,7 @@
   export let ticket: Ticket | null = null;
   export let isCreate = false;
   export let sprints: Sprint[] = [];
+  export let epics: Epic[] = [];
   export let users: User[] = [];
   // Retained for backwards compat. Once the main store is paged this may only
   // contain the currently-loaded page, which is fine for the display fallback
@@ -23,6 +24,7 @@
   // see tas-z-8q_Ljc.
   export let allTickets: Ticket[] = [];
   export let defaultSprint: string | null = null;
+  export let defaultEpic: string | null = null;
   export let defaultAssignee: string | null = null;
 
   const dispatch = createEventDispatcher();
@@ -42,6 +44,7 @@
         status: 'backlog',
         assignee: defaultAssignee || $currentUserId || null,
         sprint: defaultSprint || null,
+        epic: defaultEpic || null,
         estimate: 1,
       };
 
@@ -308,6 +311,7 @@
       };
       if (draft.assignee) body.assignee = draft.assignee;
       if (draft.sprint) body.sprint = draft.sprint;
+      if (draft.epic) body.epic = draft.epic;
       const res = await fetch('/api/tickets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -491,6 +495,22 @@
       <option value="">No sprint</option>
       {#each sprints as s}
         <option value={s.id}>{s.name}</option>
+      {/each}
+    </select>
+
+    <span class="label">Epic</span>
+    <select
+      class="input"
+      value={draft.epic || ''}
+      on:change={(e) => {
+        const v = e.currentTarget.value || null;
+        draft.epic = v;
+        if (!isCreate) schedulePatch({ epic: v });
+      }}
+    >
+      <option value="">No epic</option>
+      {#each epics as ep}
+        <option value={ep.id}>{ep.name}</option>
       {/each}
     </select>
 

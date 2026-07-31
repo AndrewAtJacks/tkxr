@@ -1,9 +1,9 @@
 import type { ProjectStorage } from '../core/storage.js';
-import type { Sprint, Ticket, TicketStatus, User } from '../core/types.js';
+import type { Epic, Sprint, Ticket, TicketStatus, User } from '../core/types.js';
 import { createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree } from '../core/worktree.js';
 
 export type BroadcastEvent =
-  | { type: 'ticket_created' | 'ticket_updated' | 'ticket_deleted' | 'sprint_created' | 'sprint_updated' | 'sprint_deleted' | 'user_created' | 'user_updated' | 'user_deleted' | 'comment_created' | 'comment_deleted'; data: any };
+  | { type: 'ticket_created' | 'ticket_updated' | 'ticket_deleted' | 'sprint_created' | 'sprint_updated' | 'sprint_deleted' | 'epic_created' | 'epic_updated' | 'epic_deleted' | 'user_created' | 'user_updated' | 'user_deleted' | 'comment_created' | 'comment_deleted'; data: any };
 
 export interface ToolContext {
   storage: ProjectStorage;
@@ -33,6 +33,7 @@ export interface ToolDef {
 
 const STATUSES = ['backlog', 'progress', 'review', 'blocked', 'done'] as const;
 const SPRINT_STATUSES = ['planning', 'active', 'completed'] as const;
+const EPIC_STATUSES = ['planning', 'active', 'completed'] as const;
 const PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
 
 function jsonResult(payload: any): ToolResult {
@@ -63,9 +64,13 @@ mutate the project state without shelling out.
 ## Data model
 - **Ticket**: id (\`tas-*\` for tasks, \`bug-*\` for bugs), title, description,
   status ∈ {backlog, progress, review, blocked, done}, priority ∈ {low, medium, high, critical},
-  estimate (story points), assignee (User id), sprint (Sprint id), labels[].
+  estimate (story points), assignee (User id), sprint (Sprint id), epic (Epic id), labels[].
 - **Sprint**: id (\`spr-*\`), name, description, goal, status ∈ {planning, active, completed},
-  startDate, endDate.
+  startDate, endDate. A sprint is the **top-level frame that wraps the whole workspace** —
+  the board view is scoped to a single active sprint.
+- **Epic**: id (\`epi-*\`), name, description, goal, color, status ∈ {planning, active, completed},
+  sprint (Sprint id). Epics are the **mid-level grouping of tickets within a sprint** — they
+  replace the role sprints used to play for bucketing tasks/bugs.
 - **User**: id (\`use-*\`), username, displayName, email, color.
 - **Comment**: id, ticketId, author (User id), content.
 
@@ -85,9 +90,11 @@ mutate the project state without shelling out.
 - \`update_ticket_status\` — the fastest way to move a card. Emits a WebSocket broadcast
   so the web UI live-refreshes.
 - \`assign_ticket\` — set or clear the assignee. Accepts a User id or a bare username.
-- \`set_ticket_sprint\` — add/remove a ticket from a sprint.
+- \`set_ticket_sprint\` — add/remove a ticket from a sprint (workspace).
+- \`set_ticket_epic\` — add/remove a ticket from an epic (grouping within the sprint).
 - \`add_comment\` — thread a comment. Author must be a User id or a resolvable username.
 - \`create_sprint\` / \`edit_sprint\` / \`update_sprint_status\` — sprint lifecycle.
+- \`create_epic\` / \`edit_epic\` / \`delete_epic\` — epic lifecycle. \`list_epics\` / \`get_epic\` read them.
 - \`create_user\` / \`edit_user\` — people.
 
 ## Read tools
@@ -177,6 +184,7 @@ export const TOOLS: ToolDef[] = [
         sprint: { type: 'string', description: 'Filter by sprint id. Use "none" for tickets not in a sprint.' },
         sprintName: { type: 'string', description: 'Filter by sprint name (case-insensitive substring match).' },
         hasSprint: { type: 'boolean', description: 'When true, only tickets attached to a sprint.' },
+        epic: { type: 'string', description: 'Filter by epic id. Use "none" for tickets not in an epic.' },
         limit: { type: 'number', description: 'Max tickets to return (default 200).' },
         sortBy: { type: 'string', enum: ['updated', 'created', 'priority', 'title'], description: 'Sort order (default: updated desc).' },
       },
@@ -210,6 +218,8 @@ export const TOOLS: ToolDef[] = [
         if (sprintIdFilter && t.sprint !== sprintIdFilter) return false;
         if (args.hasSprint === true && !t.sprint) return false;
         if (args.hasSprint === false && t.sprint) return false;
+        if (args.epic === 'none' && t.epic) return false;
+        if (args.epic && args.epic !== 'none' && t.epic !== args.epic) return false;
         return true;
       });
 
@@ -257,9 +267,11 @@ export const TOOLS: ToolDef[] = [
       const comments = await storage.getComments(id);
       const users = await storage.getUsers();
       const sprints = await storage.getSprints();
+      const epics = await storage.getEpics();
       const allTickets = await storage.getAllTickets();
       const assignee = ticket.assignee ? users.find(u => u.id === ticket.assignee) || null : null;
       const sprint = ticket.sprint ? sprints.find(s => s.id === ticket.sprint) || null : null;
+      const epic = ticket.epic ? epics.find(e => e.id === ticket.epic) || null : null;
       const dependencies = (ticket.dependsOn || []).map(dep => {
         const t = allTickets.find(x => x.id === dep);
         return t
@@ -267,7 +279,7 @@ export const TOOLS: ToolDef[] = [
           : { id: dep, missing: true };
       });
       const blockedBy = dependencies.filter(d => !d.done && !('missing' in d && d.missing));
-      return jsonResult({ ticket, comments, assignee, sprint, dependencies, blockedBy });
+      return jsonResult({ ticket, comments, assignee, sprint, epic, dependencies, blockedBy });
     },
   },
   {
@@ -396,7 +408,8 @@ export const TOOLS: ToolDef[] = [
         title: { type: 'string' },
         description: { type: 'string' },
         assignee: { type: 'string', description: 'User id or username' },
-        sprint: { type: 'string', description: 'Sprint id' },
+        sprint: { type: 'string', description: 'Sprint id (top-level workspace)' },
+        epic: { type: 'string', description: 'Epic id (grouping within the sprint)' },
         priority: { type: 'string', enum: [...PRIORITIES] },
         estimate: { type: 'number' },
         status: { type: 'string', enum: [...STATUSES], description: 'Override initial status (defaults to backlog).' },
@@ -411,6 +424,7 @@ export const TOOLS: ToolDef[] = [
       if (args.description !== undefined) opts.description = args.description;
       if (assigneeId) opts.assignee = assigneeId;
       if (args.sprint) opts.sprint = args.sprint;
+      if (args.epic) opts.epic = args.epic;
       if (args.priority) opts.priority = args.priority;
       if (args.estimate !== undefined) opts.estimate = args.estimate;
       if (args.labels) opts.labels = args.labels;
@@ -437,7 +451,8 @@ export const TOOLS: ToolDef[] = [
         priority: { type: 'string', enum: [...PRIORITIES] },
         estimate: { type: 'number' },
         assignee: { type: 'string', description: 'User id or username' },
-        sprint: { type: 'string', description: 'Sprint id' },
+        sprint: { type: 'string', description: 'Sprint id (top-level workspace)' },
+        epic: { type: 'string', description: 'Epic id (grouping within the sprint)' },
         addLabels: { type: 'array', items: { type: 'string' } },
         removeLabels: { type: 'array', items: { type: 'string' } },
         clearLabels: { type: 'boolean' },
@@ -450,6 +465,7 @@ export const TOOLS: ToolDef[] = [
         clearEstimate: { type: 'boolean' },
         clearAssignee: { type: 'boolean' },
         clearSprint: { type: 'boolean' },
+        clearEpic: { type: 'boolean' },
       },
       required: ['id'],
     },
@@ -461,11 +477,13 @@ export const TOOLS: ToolDef[] = [
       if (args.estimate !== undefined) patch.estimate = args.estimate;
       if (args.assignee !== undefined) patch.assignee = await resolveUserId(storage, args.assignee);
       if (args.sprint !== undefined) patch.sprint = args.sprint;
+      if (args.epic !== undefined) patch.epic = args.epic;
       if (args.clearDescription) patch.description = undefined;
       if (args.clearPriority) patch.priority = undefined;
       if (args.clearEstimate) patch.estimate = undefined;
       if (args.clearAssignee) patch.assignee = undefined;
       if (args.clearSprint) patch.sprint = undefined;
+      if (args.clearEpic) patch.epic = undefined;
 
       const found = await storage.findTicket(args.id);
       if (!found) return errorResult(`Ticket "${args.id}" not found`);
@@ -708,6 +726,148 @@ export const TOOLS: ToolDef[] = [
         broadcast?.({ type: 'ticket_updated', data: t });
       }
       return jsonResult({ id, deleted: true, sweptTicketIds: sweptTickets.map(t => t.id) });
+    },
+  },
+
+  // -------------- Epic tools --------------
+  {
+    name: 'list_epics',
+    description: 'List epics (mid-level ticket grouping within a sprint). Optionally filter by sprint id. Includes ticket counts + story points per epic.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sprint: { type: 'string', description: 'Filter epics to a single sprint (workspace) id.' },
+        status: { type: 'string', enum: [...EPIC_STATUSES] },
+      },
+    },
+    handler: async ({ sprint, status }, { storage }) => {
+      let epics = await storage.getEpics();
+      if (sprint) epics = epics.filter(e => e.sprint === sprint);
+      if (status) epics = epics.filter(e => e.status === status);
+      const tickets = await storage.getAllTickets();
+      const enriched = epics.map(e => {
+        const scoped = tickets.filter(t => t.epic === e.id);
+        const donePts = scoped.filter(t => t.status === 'done').reduce((sum, t) => sum + (t.estimate || 0), 0);
+        const totalPts = scoped.reduce((sum, t) => sum + (t.estimate || 0), 0);
+        return { ...e, ticketCount: scoped.length, donePoints: donePts, totalPoints: totalPts };
+      });
+      return jsonResult(enriched);
+    },
+  },
+  {
+    name: 'get_epic',
+    description: 'Return a single epic with its full ticket list.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+    },
+    handler: async ({ id }, { storage }) => {
+      const epic = (await storage.getEpics()).find(e => e.id === id);
+      if (!epic) return errorResult(`Epic "${id}" not found`);
+      const tickets = (await storage.getAllTickets()).filter(t => t.epic === id);
+      return jsonResult({ epic, tickets });
+    },
+  },
+  {
+    name: 'create_epic',
+    description: 'Create a new epic (grouping of tickets within a sprint). Defaults to status=active. Broadcasts epic_created.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        description: { type: 'string' },
+        goal: { type: 'string' },
+        color: { type: 'string', description: 'Hex color for the epic chip' },
+        status: { type: 'string', enum: [...EPIC_STATUSES] },
+        sprint: { type: 'string', description: 'Sprint (workspace) id this epic belongs to' },
+      },
+      required: ['name'],
+    },
+    handler: async (args, { storage, broadcast }) => {
+      const opts: Partial<Epic> = {};
+      if (args.description) opts.description = args.description;
+      if (args.goal) opts.goal = args.goal;
+      if (args.color) opts.color = args.color;
+      if (args.status) opts.status = args.status;
+      if (args.sprint) opts.sprint = args.sprint;
+      const epic = await storage.createEpic(args.name, opts);
+      broadcast?.({ type: 'epic_created', data: epic });
+      return jsonResult(epic);
+    },
+  },
+  {
+    name: 'edit_epic',
+    description: 'Partial-update an epic (name, description, goal, color, status, sprint). Broadcasts epic_updated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        goal: { type: 'string' },
+        color: { type: 'string' },
+        status: { type: 'string', enum: [...EPIC_STATUSES] },
+        sprint: { type: 'string' },
+        clearDescription: { type: 'boolean' },
+        clearGoal: { type: 'boolean' },
+        clearSprint: { type: 'boolean' },
+      },
+      required: ['id'],
+    },
+    handler: async (args, { storage, broadcast }) => {
+      const patch: any = {};
+      if (args.name !== undefined) patch.name = args.name;
+      if (args.description !== undefined) patch.description = args.description;
+      if (args.goal !== undefined) patch.goal = args.goal;
+      if (args.color !== undefined) patch.color = args.color;
+      if (args.status !== undefined) patch.status = args.status;
+      if (args.sprint !== undefined) patch.sprint = args.sprint;
+      if (args.clearDescription) patch.description = undefined;
+      if (args.clearGoal) patch.goal = undefined;
+      if (args.clearSprint) patch.sprint = undefined;
+      const updated = await storage.updateEpic(args.id, patch);
+      if (!updated) return errorResult(`Epic "${args.id}" not found`);
+      broadcast?.({ type: 'epic_updated', data: updated });
+      return jsonResult(updated);
+    },
+  },
+  {
+    name: 'delete_epic',
+    description: 'Delete an epic by id. Tickets in the epic have their epic field cleared and each is re-broadcast as ticket_updated so open web clients refresh.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+    },
+    handler: async ({ id }, { storage, broadcast }) => {
+      const { ok, sweptTickets } = await storage.deleteEpic(id);
+      if (!ok) return errorResult(`Epic "${id}" not found`);
+      broadcast?.({ type: 'epic_deleted', data: { id } });
+      for (const t of sweptTickets) {
+        broadcast?.({ type: 'ticket_updated', data: t });
+      }
+      return jsonResult({ id, deleted: true, sweptTicketIds: sweptTickets.map(t => t.id) });
+    },
+  },
+  {
+    name: 'set_ticket_epic',
+    description: 'Add a ticket to an epic or remove it. Provide epicId to add, or set unset:true to remove. Broadcasts ticket_updated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        epicId: { type: 'string' },
+        unset: { type: 'boolean' },
+      },
+      required: ['id'],
+    },
+    handler: async ({ id, epicId, unset }, { storage, broadcast }) => {
+      const patch: any = unset ? { epic: null } : { epic: epicId };
+      const updated = await storage.updateTicket(id, patch);
+      if (!updated) return errorResult(`Ticket "${id}" not found`);
+      broadcast?.({ type: 'ticket_updated', data: updated });
+      return jsonResult(updated);
     },
   },
   {

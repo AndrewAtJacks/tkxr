@@ -18,6 +18,7 @@ export interface Ticket {
   status: TicketStatus;
   assignee?: string | null;
   sprint?: string | null;
+  epic?: string | null;
   estimate?: number;
   labels?: string[];
   priority?: TicketPriority;
@@ -45,6 +46,18 @@ export interface Sprint {
   endDate?: string;
   goal?: string;
   worktree?: TicketWorktree | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Epic {
+  id: string;
+  name: string;
+  description?: string;
+  status: 'planning' | 'active' | 'completed';
+  color?: string;
+  goal?: string;
+  sprint?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -85,6 +98,8 @@ export interface PagedTicketQuery {
   q?: string;
   /** Sprint id, the literal `'none'` for tickets with no sprint, or omitted. */
   sprint?: string;
+  /** Epic id, the literal `'none'` for tickets with no epic, or omitted. */
+  epic?: string;
   /** User id, the literal `'none'` for unassigned tickets, or omitted. */
   assignee?: string;
   type?: 'task' | 'bug';
@@ -163,6 +178,7 @@ function buildQueryString(q: PagedTicketQuery, cursor: string | null): string {
   if (cursor) params.set('cursor', cursor);
   if (q.q) params.set('q', q.q);
   if (q.sprint) params.set('sprint', q.sprint);
+  if (q.epic) params.set('epic', q.epic);
   if (q.assignee) params.set('assignee', q.assignee);
   if (q.type) params.set('type', q.type);
   if (q.status) params.set('status', q.status);
@@ -180,6 +196,10 @@ function ticketMatchesQuery(t: Ticket, q: PagedTicketQuery): boolean {
   if (q.sprint) {
     if (q.sprint === 'none') { if (t.sprint) return false; }
     else if (t.sprint !== q.sprint) return false;
+  }
+  if (q.epic) {
+    if (q.epic === 'none') { if (t.epic) return false; }
+    else if (t.epic !== q.epic) return false;
   }
   if (q.assignee) {
     if (q.assignee === 'none') { if (t.assignee) return false; }
@@ -338,6 +358,7 @@ export const ticketStore = writable<Ticket[]>([]);
 pagedTickets.items.subscribe(items => ticketStore.set(items));
 
 export const sprintStore = writable<Sprint[]>([]);
+export const epicStore = writable<Epic[]>([]);
 export const userStore = writable<User[]>([]);
 
 // Server-reported claude CLI probe result. `null` until `/api/config` responds.

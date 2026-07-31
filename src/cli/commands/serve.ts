@@ -200,7 +200,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
   //   status   — single `TicketStatus` (used by board per-column paging later)
   //   sortBy   — `updated` (default) | `created` | `priority` | `title`
   //              Priority sort keeps the client's bug-over-task tiebreak.
-  const PAGING_PARAM_KEYS = ['limit', 'cursor', 'q', 'sprint', 'assignee', 'type', 'status', 'sortBy'] as const;
+  const PAGING_PARAM_KEYS = ['limit', 'cursor', 'q', 'sprint', 'epic', 'assignee', 'type', 'status', 'sortBy'] as const;
   const VALID_SORT_BY = new Set<TicketSortBy>(['updated', 'created', 'priority', 'title']);
   const VALID_TYPES = new Set(['task', 'bug']);
   const VALID_STATUSES = new Set(['backlog', 'progress', 'review', 'blocked', 'done']);
@@ -234,6 +234,9 @@ export async function startServer(args: ServeArgs): Promise<void> {
       }
       if (typeof req.query.sprint === 'string' && req.query.sprint.length > 0) {
         opts.sprint = req.query.sprint;
+      }
+      if (typeof req.query.epic === 'string' && req.query.epic.length > 0) {
+        opts.epic = req.query.epic;
       }
       if (typeof req.query.assignee === 'string' && req.query.assignee.length > 0) {
         opts.assignee = req.query.assignee;
@@ -345,6 +348,74 @@ export async function startServer(args: ServeArgs): Promise<void> {
       res.json(sprints);
     } catch (error) {
       res.status(500).json({ error: 'Failed to load sprints' });
+    }
+  });
+
+  // --- Epics ----------------------------------------------------------------
+  // Epics are the mid-level grouping of tickets within a sprint/workspace.
+  // Optional `?sprint=<id>` scopes the list to a single workspace.
+  app.get('/api/epics', async (req, res) => {
+    try {
+      await storage.loadProject();
+      let epics = await storage.getEpics();
+      if (typeof req.query.sprint === 'string' && req.query.sprint.length > 0) {
+        epics = epics.filter(e => e.sprint === req.query.sprint);
+      }
+      res.json(epics);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to load epics' });
+    }
+  });
+
+  app.post('/api/epics', async (req, res) => {
+    try {
+      const { name, ...rest } = req.body || {};
+      if (!name || typeof name !== 'string') {
+        return res.status(400).json({ error: 'Epic name is required' });
+      }
+      const opts: any = {};
+      if (rest.description) opts.description = rest.description;
+      if (rest.goal) opts.goal = rest.goal;
+      if (rest.color) opts.color = rest.color;
+      if (rest.status) opts.status = rest.status;
+      if (rest.sprint) opts.sprint = rest.sprint;
+      const epic = await storage.createEpic(name, opts);
+      broadcast(wss, { type: 'epic_created', data: epic });
+      res.json(epic);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to create epic' });
+    }
+  });
+
+  app.put('/api/epics/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates = req.body || {};
+      const epic = await storage.updateEpic(id, updates);
+      if (!epic) {
+        return res.status(404).json({ error: 'Epic not found' });
+      }
+      broadcast(wss, { type: 'epic_updated', data: epic });
+      res.json(epic);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to update epic' });
+    }
+  });
+
+  app.delete('/api/epics/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { ok, sweptTickets } = await storage.deleteEpic(id);
+      if (!ok) {
+        return res.status(404).json({ error: 'Epic not found' });
+      }
+      broadcast(wss, { type: 'epic_deleted', data: { id } });
+      for (const t of sweptTickets) {
+        broadcast(wss, { type: 'ticket_updated', data: t });
+      }
+      res.json({ id, deleted: true, sweptTicketIds: sweptTickets.map(t => t.id) });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to delete epic' });
     }
   });
 

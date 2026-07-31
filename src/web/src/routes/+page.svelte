@@ -1,8 +1,8 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { onDestroy, onMount } from 'svelte';
-  import type { PagedTicketQuery, Sprint, Ticket, TicketSortBy, User } from '../lib/stores';
-  import { pagedTickets, sprintStore, ticketStore, userStore, claudeConfig, ghConfig } from '../lib/stores';
+  import type { Epic, PagedTicketQuery, Sprint, Ticket, TicketSortBy, User } from '../lib/stores';
+  import { pagedTickets, sprintStore, epicStore, ticketStore, userStore, claudeConfig, ghConfig } from '../lib/stores';
   import { activeRunId } from '../lib/claudeRun';
 
   // Local aliases so Svelte's `$store` auto-subscription can reach into the
@@ -23,6 +23,8 @@
   import WorkspacePanel from '../lib/WorkspacePanel.svelte';
   import TicketPanel from '../lib/TicketPanel.svelte';
   import SprintPanel from '../lib/SprintPanel.svelte';
+  import SprintSwitcher from '../lib/SprintSwitcher.svelte';
+  import EpicPanel from '../lib/EpicPanel.svelte';
   import UserPanel from '../lib/UserPanel.svelte';
   import TriagePanel from '../lib/TriagePanel.svelte';
   import ClaudeRunPanel from '../lib/ClaudeRunPanel.svelte';
@@ -30,17 +32,27 @@
   import Toaster from '../lib/Toaster.svelte';
   import { normalizeTicket } from '../lib/util';
 
-  type Panel = null | 'ticket' | 'sprint' | 'user' | 'triage';
+  type Panel = null | 'ticket' | 'sprint' | 'epic' | 'user' | 'triage';
   let view: 'board' | 'list' = 'board';
-  let activeSprint: string = 'all';
+  // `activeSprint` is now the *workspace* — the sprint that frames the whole
+  // board. '' means no workspace picked yet (→ the SprintSwitcher gate).
+  let activeSprint: string = '';
+  // `activeEpic` is the in-workspace grouping filter that replaced the old
+  // sprint-as-filter role. 'all' = show every epic, 'none' = tickets with no
+  // epic, or a specific epic id.
+  let activeEpic: string = 'all';
   let activeUser: string = 'all';
   let typeFilter: 'all' | 'task' | 'bug' = 'all';
   let sortBy = 'updated';
   let search = '';
+  // Explicit "switch sprint" view (the separate workspace picker). The gate
+  // also renders SprintSwitcher whenever no valid workspace is active.
+  let showSwitcher = false;
   let panel: Panel = null;
   let isCreate = false;
   let selectedTicketId: string | null = null;
   let selectedSprintId: string | null = null;
+  let selectedEpicId: string | null = null;
   let selectedUserId: string | null = null;
   // Fallback for tickets not in the current paged slice (Board columns +
   // main list each hold their own page; `$ticketStore` mirrors only the main
@@ -60,7 +72,8 @@
       if (s) {
         const j = JSON.parse(s);
         view = j.view || 'board';
-        activeSprint = j.activeSprint || 'all';
+        activeSprint = j.activeSprint || '';
+        activeEpic = j.activeEpic || 'all';
         activeUser = j.activeUser || 'all';
         typeFilter = j.typeFilter || 'all';
         sortBy = j.sortBy || 'updated';
@@ -70,17 +83,34 @@
   }
   $: if (browser) {
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ view, activeSprint, activeUser, typeFilter, sortBy, search }));
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ view, activeSprint, activeEpic, activeUser, typeFilter, sortBy, search }));
     } catch { /* noop */ }
   }
 
-  // If the selected sprint/user disappears (deleted from another client or CLI),
-  // fall back to 'all' so the board doesn't silently go empty. Also close any
-  // open panel targeting the now-deleted entity so we don't render stale state.
-  $: if (activeSprint !== 'all' && activeSprint !== 'none'
+  // The active workspace resolved from the current sprint id. Null → gate.
+  $: workspaceSprint = activeSprint ? ($sprintStore as Sprint[]).find(s => s.id === activeSprint) || null : null;
+  // Epics scoped to the active workspace drive the sidebar grouping + filter.
+  $: workspaceEpics = ($epicStore as Epic[]).filter(e => e.sprint === activeSprint);
+
+  // If the active workspace sprint disappears (deleted elsewhere) drop back to
+  // the gate rather than silently showing an empty board.
+  $: if (activeSprint
       && $sprintStore.length > 0
       && !($sprintStore as Sprint[]).some(s => s.id === activeSprint)) {
-    activeSprint = 'all';
+    activeSprint = '';
+  }
+  // If the active epic filter points at an epic that no longer exists (deleted
+  // or belongs to another workspace), clear it back to "all".
+  $: if (activeEpic !== 'all' && activeEpic !== 'none'
+      && $epicStore.length >= 0
+      && !workspaceEpics.some(e => e.id === activeEpic)) {
+    activeEpic = 'all';
+  }
+  $: if (selectedEpicId !== null
+      && ($epicStore as Epic[]).length > 0
+      && !($epicStore as Epic[]).some(e => e.id === selectedEpicId)) {
+    selectedEpicId = null;
+    if (panel === 'epic') panel = null;
   }
   $: if (activeUser !== 'all' && activeUser !== 'none'
       && $userStore.length > 0
@@ -119,7 +149,9 @@
   function currentQuery(): PagedTicketQuery {
     const q: PagedTicketQuery = {};
     if (search) q.q = search;
-    if (activeSprint !== 'all') q.sprint = activeSprint; // 'none' passed through
+    // The board is always scoped to the active workspace sprint.
+    if (activeSprint) q.sprint = activeSprint;
+    if (activeEpic !== 'all') q.epic = activeEpic; // 'none' passed through
     if (activeUser !== 'all') q.assignee = activeUser;   // 'none' passed through
     if (typeFilter !== 'all') q.type = typeFilter;
     q.sortBy = sortBy as TicketSortBy;
@@ -132,13 +164,15 @@
     // to the pre-paging bulk-load.
     const ticketsP = pagedTickets.resetAndFetch(currentQuery());
     try {
-      const [sRes, uRes, cRes, ccRes] = await Promise.all([
+      const [sRes, eRes, uRes, cRes, ccRes] = await Promise.all([
         fetch('/api/sprints'),
+        fetch('/api/epics'),
         fetch('/api/users'),
         fetch('/api/config'),
         fetch('/api/comments/counts'),
       ]);
       if (sRes.ok) sprintStore.set(await sRes.json());
+      if (eRes.ok) epicStore.set(await eRes.json());
       if (uRes.ok) userStore.set(await uRes.json());
       if (cRes.ok) {
         const j = await cRes.json();
@@ -168,7 +202,7 @@
   let mounted = false;
   $: if (browser && mounted) {
     // Read all filter inputs so Svelte tracks them, then fire-and-forget.
-    void activeSprint; void activeUser; void typeFilter; void sortBy; void search;
+    void activeSprint; void activeEpic; void activeUser; void typeFilter; void sortBy; void search;
     pagedTickets.resetAndFetch(currentQuery());
   }
 
@@ -244,10 +278,11 @@
   // Board's five column stores reset together on any filter change.
   $: boardQuery = (() => {
     // Re-reference to make Svelte tracking explicit.
-    void search; void activeSprint; void activeUser; void typeFilter; void sortBy;
+    void search; void activeSprint; void activeEpic; void activeUser; void typeFilter; void sortBy;
     const q: PagedTicketQuery = {};
     if (search) q.q = search;
-    if (activeSprint !== 'all') q.sprint = activeSprint;
+    if (activeSprint) q.sprint = activeSprint;
+    if (activeEpic !== 'all') q.epic = activeEpic;
     if (activeUser !== 'all') q.assignee = activeUser;
     if (typeFilter !== 'all') q.type = typeFilter;
     q.sortBy = sortBy as TicketSortBy;
@@ -255,27 +290,21 @@
   })();
 
   $: contextTitle = (() => {
-    if (activeSprint !== 'all' && activeSprint !== 'none') {
-      const s = $sprintStore.find((sp: Sprint) => sp.id === activeSprint);
-      return s?.name || 'Sprint';
+    if (activeEpic !== 'all' && activeEpic !== 'none') {
+      const e = ($epicStore as Epic[]).find(ep => ep.id === activeEpic);
+      if (e) return e.name;
     }
-    if (activeUser !== 'all' && activeUser !== 'none') {
-      const u = $userStore.find((x: User) => x.id === activeUser);
-      return u?.displayName || 'Person';
-    }
-    return 'All tickets';
+    if (activeEpic === 'none') return 'No epic';
+    return workspaceSprint?.name || 'Workspace';
   })();
 
   $: contextSubtitle = (() => {
-    if (activeSprint !== 'all' && activeSprint !== 'none') {
-      const s = $sprintStore.find((sp: Sprint) => sp.id === activeSprint);
-      return s?.goal || '';
+    const base = workspaceSprint?.name || '';
+    if (activeEpic !== 'all' && activeEpic !== 'none') {
+      const e = ($epicStore as Epic[]).find(ep => ep.id === activeEpic);
+      return e?.goal || base;
     }
-    if (activeUser !== 'all' && activeUser !== 'none') {
-      const u = $userStore.find((x: User) => x.id === activeUser);
-      return u ? `@${u.username}` : '';
-    }
-    return '';
+    return workspaceSprint?.goal || '';
   })();
 
   // Sprint burn strip
@@ -286,7 +315,7 @@
   // burn strip to the `/api/tickets/summary` endpoint (tas-4MNJ9qP5) — no
   // client-side sum needed then.
   $: burn = (() => {
-    if (activeSprint === 'all' || activeSprint === 'none') return null;
+    if (!activeSprint) return null;
     const scoped = ($ticketStore as Ticket[]).filter(t => t.sprint === activeSprint);
     const total = scoped.reduce((s, t) => s + (t.estimate || 0), 0);
     const done = scoped.filter(t => t.status === 'done').reduce((s, t) => s + (t.estimate || 0), 0);
@@ -338,6 +367,24 @@
     isCreate = true;
     panel = 'sprint';
   }
+  function openEpicPanel(id: string) {
+    selectedEpicId = id;
+    isCreate = false;
+    panel = 'epic';
+  }
+  function newEpic() {
+    selectedEpicId = null;
+    isCreate = true;
+    panel = 'epic';
+  }
+  // Enter a workspace (sprint). Resets the in-workspace epic filter and closes
+  // the switcher/gate.
+  function selectWorkspace(id: string) {
+    if (id !== activeSprint) activeEpic = 'all';
+    activeSprint = id;
+    showSwitcher = false;
+    panel = null;
+  }
   function openUserPanel(id: string) {
     selectedUserId = id;
     isCreate = false;
@@ -355,6 +402,7 @@
     panel = null;
     selectedTicketId = null;
     selectedSprintId = null;
+    selectedEpicId = null;
     selectedUserId = null;
     openedTicket = null;
     isCreate = false;
@@ -365,7 +413,14 @@
         || (openedTicket && openedTicket.id === selectedTicketId ? openedTicket : null))
     : null;
   $: activeSprintSel = selectedSprintId ? ($sprintStore as Sprint[]).find(s => s.id === selectedSprintId) || null : null;
+  $: activeEpicSel = selectedEpicId ? ($epicStore as Epic[]).find(e => e.id === selectedEpicId) || null : null;
   $: activeUserSel = selectedUserId ? ($userStore as User[]).find(u => u.id === selectedUserId) || null : null;
+
+  // Show the workspace picker as a gate when no valid sprint is active, or on
+  // demand when the user explicitly asks to switch. Wait for the first load
+  // (`mounted`) so we don't flash the gate before sprints arrive.
+  $: needWorkspace = mounted && !workspaceSprint;
+  $: showWorkspacePicker = needWorkspace || showSwitcher;
 </script>
 
 <svelte:head>
@@ -376,63 +431,81 @@
   <Sidebar
     {version}
     {view}
-    {activeSprint}
+    {activeEpic}
     {activeUser}
-    sprints={$sprintStore}
+    workspace={workspaceSprint}
+    epics={workspaceEpics}
     users={$userStore}
     tickets={$ticketStore}
     {triageCount}
     {panel}
+    switcherOpen={showSwitcher}
     on:view={(e) => { view = e.detail; panel = null; }}
-    on:sprint={(e) => { activeSprint = e.detail; panel = null; }}
+    on:switchSprint={() => { showSwitcher = true; panel = null; }}
+    on:epic={(e) => { activeEpic = e.detail; panel = null; }}
     on:user={(e) => { activeUser = e.detail; panel = null; }}
     on:palette={() => paletteOpen = true}
     on:triage={openTriage}
     on:newSprint={newSprint}
+    on:newEpic={newEpic}
     on:newUser={newUser}
     on:manageSprint={(e) => openSprintPanel(e.detail)}
+    on:manageEpic={(e) => openEpicPanel(e.detail)}
     on:manageUser={(e) => openUserPanel(e.detail)}
     on:reload={reload}
   />
 
   <main class="main">
-    <Toolbar
-      title={contextTitle}
-      subtitle={contextSubtitle}
-      shown={$pagedTotal}
-      loading={$pagedLoading}
-      {search}
-      {typeFilter}
-      {sortBy}
-      on:search={(e) => search = e.detail}
-      on:type={(e) => typeFilter = e.detail}
-      on:sort={(e) => sortBy = e.detail}
-      on:new={newTicket}
-    />
+    {#if showWorkspacePicker}
+      <SprintSwitcher
+        sprints={$sprintStore}
+        tickets={$ticketStore}
+        {activeSprint}
+        gate={needWorkspace}
+        on:select={(e) => selectWorkspace(e.detail)}
+        on:close={() => showSwitcher = false}
+        on:reload={reload}
+      />
+    {:else}
+      <Toolbar
+        title={contextTitle}
+        subtitle={contextSubtitle}
+        shown={$pagedTotal}
+        loading={$pagedLoading}
+        {search}
+        {typeFilter}
+        {sortBy}
+        on:search={(e) => search = e.detail}
+        on:type={(e) => typeFilter = e.detail}
+        on:sort={(e) => sortBy = e.detail}
+        on:new={newTicket}
+      />
 
-    {#if burn}
-      <SprintStrip done={burn.done} total={burn.total} />
-    {/if}
-
-    <div class="view">
-      {#if view === 'board'}
-        <Board
-          query={boardQuery}
-          sprints={$sprintStore}
-          users={$userStore}
-          {commentCounts}
-          on:open={(e) => openTicket(e.detail)}
-          on:reload={reload}
-        />
-      {:else}
-        <ListView
-          tickets={filtered}
-          sprints={$sprintStore}
-          users={$userStore}
-          on:open={(e) => openTicket(e.detail)}
-        />
+      {#if burn}
+        <SprintStrip done={burn.done} total={burn.total} />
       {/if}
-    </div>
+
+      <div class="view">
+        {#if view === 'board'}
+          <Board
+            query={boardQuery}
+            sprints={$sprintStore}
+            epics={workspaceEpics}
+            users={$userStore}
+            {commentCounts}
+            on:open={(e) => openTicket(e.detail)}
+            on:reload={reload}
+          />
+        {:else}
+          <ListView
+            tickets={filtered}
+            sprints={$sprintStore}
+            users={$userStore}
+            on:open={(e) => openTicket(e.detail)}
+          />
+        {/if}
+      </div>
+    {/if}
   </main>
 </div>
 
@@ -443,9 +516,11 @@
         ticket={activeTicket}
         {isCreate}
         sprints={$sprintStore}
+        epics={workspaceEpics}
         users={$userStore}
         allTickets={$ticketStore}
-        defaultSprint={activeSprint !== 'all' && activeSprint !== 'none' ? activeSprint : null}
+        defaultSprint={activeSprint || null}
+        defaultEpic={activeEpic !== 'all' && activeEpic !== 'none' ? activeEpic : null}
         defaultAssignee={activeUser !== 'all' && activeUser !== 'none' ? activeUser : null}
         on:reload={reload}
         on:close={closePanel}
@@ -459,6 +534,18 @@
         {isCreate}
         tickets={$ticketStore}
         users={$userStore}
+        on:reload={reload}
+        on:close={closePanel}
+        on:openTicket={(e) => openTicket(e.detail)}
+      />
+    {/key}
+  {:else if panel === 'epic'}
+    {#key selectedEpicId || 'new'}
+      <EpicPanel
+        epic={activeEpicSel}
+        {isCreate}
+        sprintId={activeSprint || null}
+        tickets={$ticketStore}
         on:reload={reload}
         on:close={closePanel}
         on:openTicket={(e) => openTicket(e.detail)}
