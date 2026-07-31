@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { nanoid } from 'nanoid';
-import type { Ticket, Sprint, User, TicketType, TicketStatus, TicketComment } from './types.js';
+import type { Ticket, Sprint, Epic, User, TicketType, TicketStatus, TicketComment } from './types.js';
 import { isGitRepo, removeWorktree } from './worktree.js';
 
 // --- queryTickets support -----------------------------------------------------
@@ -17,6 +17,8 @@ export interface TicketQueryOptions {
   q?: string;
   /** Sprint id, the literal `'none'` to match unassigned-to-sprint, or omitted. */
   sprint?: string;
+  /** Epic id, the literal `'none'` to match tickets with no epic, or omitted. */
+  epic?: string;
   /** User id, the literal `'none'` to match unassigned, or omitted. */
   assignee?: string;
   type?: TicketType;
@@ -78,12 +80,14 @@ export class ProjectStorage {
   private ticketsDir: string;
   private commentsDir: string;
   private sprintsPath: string;
+  private epicsPath: string;
   private usersPath: string;
 
   constructor(basePath: string = './tkxr') {
     this.ticketsDir = path.resolve(basePath, 'tickets');
     this.commentsDir = path.resolve(basePath, 'comments');
     this.sprintsPath = path.resolve(basePath, 'sprints.json');
+    this.epicsPath = path.resolve(basePath, 'epics.json');
     this.usersPath = path.resolve(basePath, 'users.json');
   }
 
@@ -289,6 +293,111 @@ export class ProjectStorage {
       }
     }
 
+    // Detach epics that belonged to this sprint so they don't dangle under a
+    // deleted workspace. They keep their tickets but become sprintless until
+    // reassigned (mirrors how tickets get their sprint cleared above).
+    try {
+      const epics = await this.getEpics();
+      let touchedEpics = false;
+      for (const e of epics) {
+        if (e.sprint === sprintId) {
+          e.sprint = undefined;
+          e.updatedAt = new Date();
+          touchedEpics = true;
+        }
+      }
+      if (touchedEpics) {
+        await fs.writeFile(this.epicsPath, JSON.stringify(epics, null, 2), 'utf8');
+      }
+    } catch {
+      // epics.json missing / unreadable — nothing to detach.
+    }
+
+    return { ok: true, sweptTickets };
+  }
+
+  // Epic CRUD
+  async createEpic(name: string, options: Partial<Epic> = {}): Promise<Epic> {
+    const now = new Date();
+    const epic: Epic = {
+      id: this.generateId('epic'),
+      name,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+      ...options,
+    };
+    const epics = await this.getEpics();
+    epics.push(epic);
+    await this.ensureBaseDir();
+    await fs.writeFile(this.epicsPath, JSON.stringify(epics, null, 2), 'utf8');
+    return epic;
+  }
+
+  async getEpics(): Promise<Epic[]> {
+    try {
+      const content = await fs.readFile(this.epicsPath, 'utf8');
+      const epics = JSON.parse(content);
+      return epics.map((e: any) => ({
+        ...e,
+        createdAt: new Date(e.createdAt),
+        updatedAt: new Date(e.updatedAt),
+      }));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  async updateEpic(id: string, updates: Partial<Pick<Epic, 'name' | 'description' | 'goal' | 'status' | 'color' | 'sprint'>>): Promise<Epic | null> {
+    const epics = await this.getEpics();
+    const epic = epics.find(e => e.id === id);
+    if (!epic) return null;
+    Object.assign(epic, updates);
+    epic.updatedAt = new Date();
+    await fs.writeFile(this.epicsPath, JSON.stringify(epics, null, 2), 'utf8');
+    return epic;
+  }
+
+  async deleteEpic(epicId: string): Promise<{ ok: boolean; sweptTickets: Ticket[] }> {
+    const epics = await this.getEpics();
+    const index = epics.findIndex(e => e.id === epicId);
+    if (index === -1) return { ok: false, sweptTickets: [] };
+    epics.splice(index, 1);
+    await fs.writeFile(this.epicsPath, JSON.stringify(epics, null, 2), 'utf8');
+
+    // Clear the epic field on every ticket that pointed at this epic — same
+    // rationale as deleteSprint's ticket sweep: a stale ref renders a broken
+    // chip and hides the ticket from any epic-scoped view.
+    const sweptTickets: Ticket[] = [];
+    const chunkFiles = await this.getTicketChunkFiles();
+    for (const file of chunkFiles) {
+      const filePath = path.join(this.ticketsDir, file);
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      let touched = false;
+      const newLines = lines.map(line => {
+        const t = JSON.parse(line);
+        if (t.epic === epicId) {
+          touched = true;
+          const next = { ...t, updatedAt: new Date() };
+          delete next.epic;
+          sweptTickets.push({
+            ...next,
+            createdAt: new Date(t.createdAt),
+            updatedAt: next.updatedAt,
+          });
+          return JSON.stringify(next);
+        }
+        return line;
+      });
+      if (touched) {
+        await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
+      }
+    }
+
     return { ok: true, sweptTickets };
   }
 
@@ -385,6 +494,13 @@ export class ProjectStorage {
         if (opts.sprint === 'none') {
           if (t.sprint) return false;
         } else if (t.sprint !== opts.sprint) {
+          return false;
+        }
+      }
+      if (opts.epic !== undefined) {
+        if (opts.epic === 'none') {
+          if (t.epic) return false;
+        } else if (t.epic !== opts.epic) {
           return false;
         }
       }
@@ -570,6 +686,9 @@ export class ProjectStorage {
     const sprints = await this.getSprints();
     const sprint = sprints.find(s => s.id === id);
     if (sprint) return { entity: sprint, type: 'sprints' };
+    const epics = await this.getEpics();
+    const epic = epics.find(e => e.id === id);
+    if (epic) return { entity: epic, type: 'epics' };
     const users = await this.getUsers();
     const user = users.find(u => u.id === id);
     if (user) return { entity: user, type: 'users' };
@@ -606,6 +725,8 @@ export class ProjectStorage {
         return this.deleteTicket(id);
       case 'sprints':
         return (await this.deleteSprint(id)).ok;
+      case 'epics':
+        return (await this.deleteEpic(id)).ok;
       case 'users':
         return (await this.deleteUser(id)).deleted;
       case 'comments':

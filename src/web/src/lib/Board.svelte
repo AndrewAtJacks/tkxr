@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { derived } from 'svelte/store';
-  import type { PagedTicketQuery, PagedTicketStore, Sprint, Ticket, TicketStatus, User } from './stores';
+  import type { Epic, PagedTicketQuery, PagedTicketStore, Sprint, Ticket, TicketStatus, User } from './stores';
   import { createPagedTicketStore } from './stores';
   import { STATUS_COLOR, STATUS_LABEL, STATUS_ORDER, statusTint } from './util';
   import { draggingTicketId } from './drag';
@@ -14,6 +14,7 @@
   // and leave `backlog` empty. Each column keeps its own `nextCursor` so
   // "Load more" only extends that column.
   export let sprints: Sprint[] = [];
+  export let epics: Epic[] = [];
   export let users: User[] = [];
   export let commentCounts: Record<string, number> = {};
   /**
@@ -28,6 +29,7 @@
   const dispatch = createEventDispatcher();
 
   $: sprintById = new Map(sprints.map(s => [s.id, s]));
+  $: epicById = new Map(epics.map(e => [e.id, e]));
   $: userById = new Map(users.map((u, i) => [u.id, { user: u, index: i }]));
 
   // One store per column. Instantiated once at mount so subscriptions from
@@ -69,6 +71,7 @@
     return JSON.stringify({
       q: q.q || '',
       sprint: q.sprint || '',
+      epic: q.epic || '',
       assignee: q.assignee || '',
       type: q.type || '',
       sortBy: q.sortBy || '',
@@ -240,10 +243,12 @@
       <div class="cards">
         {#each list as t (t.id)}
           {@const sprint = t.sprint ? sprintById.get(t.sprint) : undefined}
+          {@const epic = t.epic ? epicById.get(t.epic) : undefined}
           {@const asg = t.assignee ? userById.get(t.assignee) : undefined}
           <BoardCard
             ticket={t}
             {sprint}
+            {epic}
             assignee={asg?.user}
             assigneeIndex={asg?.index ?? 0}
             commentCount={commentCounts[t.id] || 0}

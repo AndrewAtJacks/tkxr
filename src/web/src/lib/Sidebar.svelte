@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
-  import type { Sprint, User, Ticket } from './stores';
+  import type { Epic, Sprint, User, Ticket } from './stores';
   import { avatarColorFor, initials, sprintDotColor } from './util';
   import { theme } from './theme';
   import { currentUserId, resolveCurrentUser } from './currentUser';
@@ -20,11 +20,16 @@
 
   export let version = '';
   export let view: 'board' | 'list' = 'board';
-  export let activeSprint: string = 'all';
+  // Active workspace (sprint) — the frame the whole board sits inside.
+  export let workspace: Sprint | null = null;
+  // In-workspace epic grouping filter. 'all' | 'none' | epic id.
+  export let activeEpic: string = 'all';
+  export let epics: Epic[] = [];
   export let activeUser: string = 'all';
-  export let sprints: Sprint[] = [];
   export let users: User[] = [];
   export let tickets: Ticket[] = [];
+  // True while the sprint switcher (workspace picker) is the active view.
+  export let switcherOpen = false;
   // Legacy prop from `+page.svelte`. Kept for backwards compat but no longer
   // authoritative — Sidebar now reads `/api/tickets/summary` on mount and on
   // ticket_* WS events (tas-z-8q_Ljc). Parent may pass this in during the
@@ -35,7 +40,6 @@
   const dispatch = createEventDispatcher();
 
   let dragOverKey: string | null = null;
-  let showCompleted = false;
   let pickerOpen = false;
   let settingsOpen = false;
   let footerEl: HTMLDivElement | null = null;
@@ -137,11 +141,12 @@
   // Prefer server total when available so the "All tickets" badge is correct
   // even after the main ticket store transitions to paged loading.
   $: totalCount = summary ? summary.counts.total : tickets.length;
-  $: sprintCounts = new Map(sprints.map(s => [s.id, tickets.filter(t => t.sprint === s.id).length]));
+  // Epic + user counts are computed from the currently-loaded (workspace-scoped)
+  // page. Approximate until the summary endpoint grows epic buckets — same
+  // caveat the burn strip carries.
+  $: epicCounts = new Map(epics.map(e => [e.id, tickets.filter(t => t.epic === e.id).length]));
+  $: noEpicCount = tickets.filter(t => !t.epic).length;
   $: userCounts = new Map(users.map(u => [u.id, tickets.filter(t => t.assignee === u.id).length]));
-  $: activeSprints = sprints.filter(s => s.status !== 'completed');
-  $: completedSprints = sprints.filter(s => s.status === 'completed');
-  $: visibleSprints = showCompleted ? [...activeSprints, ...completedSprints] : activeSprints;
 
   function onCliToggle(e: Event) {
     const t = e.currentTarget as HTMLInputElement;
@@ -149,11 +154,16 @@
   }
 
   function selectView(v: 'board' | 'list') { dispatch('view', v); }
-  function selectAllSprints() { dispatch('sprint', 'all'); }
-  function openSprintPanel(id: string) { dispatch('manageSprint', id); }
-  function toggleSprintFilter(id: string) {
-    dispatch('sprint', activeSprint === id ? 'all' : id);
+  function switchSprint() { dispatch('switchSprint'); }
+  function manageWorkspace() { if (workspace) dispatch('manageSprint', workspace.id); }
+  function newSprint() { dispatch('newSprint'); }
+  function selectAllEpics() { dispatch('epic', 'all'); }
+  function selectNoEpic() { dispatch('epic', 'none'); }
+  function openEpicPanel(id: string) { dispatch('manageEpic', id); }
+  function toggleEpicFilter(id: string) {
+    dispatch('epic', activeEpic === id ? 'all' : id);
   }
+  function newEpic() { dispatch('newEpic'); }
   function selectAllUsers() { dispatch('user', 'all'); }
   function openUserPanel(id: string) { dispatch('manageUser', id); }
   function toggleUserFilter(id: string) {
@@ -161,7 +171,6 @@
   }
   function openPalette() { dispatch('palette'); }
   function openTriage() { dispatch('triage'); }
-  function newSprint() { dispatch('newSprint'); }
   function newUser() { dispatch('newUser'); }
 
   async function persistTicket(id: string, patch: any) {
@@ -175,15 +184,15 @@
     } catch (e) { /* noop */ }
   }
 
-  function onDrop(kind: 'all-sprint' | 'sprint' | 'all-user' | 'user', id?: string) {
+  function onDrop(kind: 'all-epic' | 'epic' | 'all-user' | 'user', id?: string) {
     return async (e: DragEvent) => {
       e.preventDefault();
       dragOverKey = null;
       const tid = $draggingTicketId;
       draggingTicketId.set(null);
       if (!tid) return;
-      if (kind === 'all-sprint') await persistTicket(tid, { sprint: null });
-      else if (kind === 'sprint') await persistTicket(tid, { sprint: id });
+      if (kind === 'all-epic') await persistTicket(tid, { epic: null });
+      else if (kind === 'epic') await persistTicket(tid, { epic: id });
       else if (kind === 'all-user') await persistTicket(tid, { assignee: null });
       else if (kind === 'user') await persistTicket(tid, { assignee: id });
     };
@@ -239,60 +248,79 @@
     </button>
   </nav>
 
-  <div class="section-label">
-    <span>Sprints</span>
+  <div class="workspace">
+    <button class="ws-main" class:active={switcherOpen} on:click={switchSprint} title="Switch sprint">
+      <span class="dot" style="background:{workspace ? sprintDotColor(workspace.status) : 'var(--faint)'}"></span>
+      <div class="ws-meta">
+        <div class="ws-kicker">Sprint</div>
+        <div class="ws-name">{workspace ? workspace.name : 'No sprint selected'}</div>
+      </div>
+      <span class="ws-switch">Switch</span>
+    </button>
+    {#if workspace}
+      <button class="icon-btn" title="Edit sprint" on:click={manageWorkspace}><SettingsIcon size={12} /></button>
+    {/if}
     <button class="icon-btn" title="New sprint" on:click={newSprint}><Plus size={12} /></button>
   </div>
-  <div class="section-list" style="max-height:200px">
+
+  <div class="section-label">
+    <span>Epics</span>
+    <button class="icon-btn" title="New epic" on:click={newEpic}><Plus size={12} /></button>
+  </div>
+  <div class="section-list" style="max-height:220px">
     <button
-      style={rowStyle(activeSprint === 'all' && !panel, 'all-sprint')}
-      on:click={selectAllSprints}
-      on:dragover={onDragOver('all-sprint')}
+      style={rowStyle(activeEpic === 'all' && !panel, 'all-epic')}
+      on:click={selectAllEpics}
+      on:dragover={onDragOver('all-epic')}
       on:dragleave={onDragLeave}
-      on:drop={onDrop('all-sprint')}
+      on:drop={onDrop('all-epic')}
     >
       <span class="dot" style="background:var(--faint)"></span>
       <span class="row-label">All tickets</span>
       <span class="mono count">{totalCount}</span>
     </button>
-    {#each visibleSprints as sp (sp.id)}
+    {#each epics as ep (ep.id)}
       <div
         class="row"
         role="button"
         tabindex="-1"
-        style={dragOverKey === `sp:${sp.id}` ? 'background:rgba(76,141,255,.13);box-shadow:inset 0 0 0 1px #4c8dff;' : ''}
-        on:dragover={onDragOver(`sp:${sp.id}`)}
+        style={dragOverKey === `ep:${ep.id}` ? 'background:rgba(76,141,255,.13);box-shadow:inset 0 0 0 1px #4c8dff;' : ''}
+        on:dragover={onDragOver(`ep:${ep.id}`)}
         on:dragleave={onDragLeave}
-        on:drop={onDrop('sprint', sp.id)}
+        on:drop={onDrop('epic', ep.id)}
       >
         <button
           class="row-main"
-          style="color:{activeSprint === sp.id ? 'var(--text)' : 'var(--muted)'};font-weight:{activeSprint === sp.id ? 600 : 400};background:{activeSprint === sp.id ? 'var(--nav-active)' : 'transparent'}"
-          title="Open sprint"
-          on:click={() => openSprintPanel(sp.id)}
+          style="color:{activeEpic === ep.id ? 'var(--text)' : 'var(--muted)'};font-weight:{activeEpic === ep.id ? 600 : 400};background:{activeEpic === ep.id ? 'var(--nav-active)' : 'transparent'}"
+          title="Open epic"
+          on:click={() => openEpicPanel(ep.id)}
         >
-          <span class="dot" style="background:{sprintDotColor(sp.status)}"></span>
-          <span class="row-label">{sp.name}</span>
+          <span class="dot" style="background:{ep.color || 'var(--faint)'}"></span>
+          <span class="row-label">{ep.name}</span>
         </button>
-        <span class="mono count">{sprintCounts.get(sp.id) || 0}</span>
+        <span class="mono count">{epicCounts.get(ep.id) || 0}</span>
         <button
           class="filter-btn"
-          class:active={activeSprint === sp.id}
-          title={activeSprint === sp.id ? 'Clear sprint filter' : 'Filter board to this sprint'}
-          on:click={() => toggleSprintFilter(sp.id)}
+          class:active={activeEpic === ep.id}
+          title={activeEpic === ep.id ? 'Clear epic filter' : 'Filter board to this epic'}
+          on:click={() => toggleEpicFilter(ep.id)}
         >
           <Filter size={11} />
         </button>
       </div>
     {/each}
-    {#if completedSprints.length > 0}
+    {#if noEpicCount > 0 || activeEpic === 'none'}
       <button
-        class="show-completed"
-        title={showCompleted ? 'Hide completed sprints' : 'Show completed sprints'}
-        on:click={() => (showCompleted = !showCompleted)}
+        style={rowStyle(activeEpic === 'none' && !panel, 'none-epic')}
+        on:click={selectNoEpic}
       >
-        {showCompleted ? 'Hide completed' : `Show completed (${completedSprints.length})`}
+        <span class="dot" style="background:var(--surface-3)"></span>
+        <span class="row-label">No epic</span>
+        <span class="mono count">{noEpicCount}</span>
       </button>
+    {/if}
+    {#if epics.length === 0}
+      <div class="epics-empty">No epics yet — group this sprint's tickets by creating one.</div>
     {/if}
   </div>
 
@@ -511,6 +539,63 @@
     padding: 2px 5px;
     border-radius: 4px;
   }
+  .workspace {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 14px 12px 2px;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+  }
+  .ws-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+  }
+  .ws-main:hover { background: var(--surface-hover); }
+  .ws-main.active { background: var(--nav-active); }
+  .ws-meta { flex: 1; min-width: 0; }
+  .ws-kicker {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .ws-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ws-switch {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--accent);
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: rgba(76,141,255,.1);
+    flex: none;
+  }
+  .epics-empty {
+    padding: 8px 10px;
+    font-size: 11px;
+    color: var(--faint);
+    line-height: 1.4;
+  }
   .section-label {
     padding: 18px 16px 6px;
     font-size: 10.5px;
@@ -605,20 +690,6 @@
     color: var(--accent);
     background: rgba(76,141,255,.12);
   }
-  .show-completed {
-    margin: 4px 4px 2px;
-    padding: 5px 8px;
-    background: transparent;
-    border: none;
-    border-radius: 5px;
-    color: var(--faint);
-    font-size: 11px;
-    font-weight: 500;
-    text-align: left;
-    cursor: pointer;
-    transition: background .12s, color .12s;
-  }
-  .show-completed:hover { background: var(--surface); color: var(--text2); }
   .footer {
     border-top: 1px solid var(--border-subtle);
     padding: 10px 14px;

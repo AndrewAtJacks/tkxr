@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { Sprint, Ticket, User } from './stores';
+  import type { Epic, Sprint, Ticket, User } from './stores';
   import { avatarColorFor, initials, PRIORITY_META } from './util';
   import { draggingTicketId } from './drag';
   import Bug from './icons/Bug.svelte';
@@ -9,6 +9,7 @@
 
   export let ticket: Ticket;
   export let sprint: Sprint | undefined = undefined;
+  export let epic: Epic | undefined = undefined;
   export let assignee: User | undefined = undefined;
   export let assigneeIndex = 0;
   export let commentCount = 0;
@@ -57,7 +58,12 @@
   </div>
   <div class="title">{ticket.title}</div>
   <div class="row3">
-    {#if sprint}
+    {#if epic}
+      <span class="epic-chip" style="border-color:{epic.color || 'var(--border-2)'};color:{epic.color || 'var(--muted)'}">
+        <span class="epic-dot" style="background:{epic.color || 'var(--muted)'}"></span>
+        {epic.name}
+      </span>
+    {:else if sprint}
       <span class="sprint-chip">{sprint.name}</span>
     {/if}
     {#if ticket.estimate}
@@ -134,6 +140,22 @@
     white-space: nowrap;
     color: var(--muted);
   }
+  .epic-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    padding: 2px 6px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .epic-dot { width: 6px; height: 6px; border-radius: 2px; flex: none; }
   .pts {
     font-size: 10.5px;
     color: var(--faint);
