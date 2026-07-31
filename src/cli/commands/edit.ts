@@ -9,6 +9,8 @@ interface EditArgs extends minimist.ParsedArgs {
   title?: string;
   description?: string;
   priority?: string;
+  epic?: string;
+  'clear-epic'?: boolean;
   estimate?: string | number;
   'add-label'?: string | string[];
   'remove-label'?: string | string[];
@@ -30,7 +32,7 @@ export async function editTicket(args: EditArgs): Promise<void> {
 
   if (!id) {
     console.log(chalk.red('Error: Ticket ID is required'));
-    console.log(chalk.gray('Usage: tkxr edit <ticket-id> [--title …] [--description …] [--priority …] [--estimate N] [--add-label L] [--remove-label L] [--clear-labels] [--clear-priority] [--clear-estimate] [--clear-description]'));
+    console.log(chalk.gray('Usage: tkxr edit <ticket-id> [--title …] [--description …] [--priority …] [--epic …] [--clear-epic] [--estimate N] [--add-label L] [--remove-label L] [--clear-labels] [--clear-priority] [--clear-estimate] [--clear-description]'));
     process.exit(1);
   }
 
@@ -73,6 +75,19 @@ export async function editTicket(args: EditArgs): Promise<void> {
     updates.estimate = n;
   }
 
+  if (args['clear-epic']) {
+    updates.epic = undefined;
+  } else if (args.epic !== undefined) {
+    const epics = await storage.getEpics();
+    const epic = epics.find(e => e.id === String(args.epic));
+    if (!epic) {
+      console.log(chalk.red(`Error: Epic "${args.epic}" not found.`));
+      console.log(chalk.gray('Run "tkxr epics" to see available epics.'));
+      process.exit(1);
+    }
+    updates.epic = epic.id;
+  }
+
   const addLabels = toArray(args['add-label']);
   const removeLabels = toArray(args['remove-label']);
   const clearLabels = Boolean(args['clear-labels']);
@@ -106,6 +121,7 @@ export async function editTicket(args: EditArgs): Promise<void> {
     console.log(chalk.gray(`  ID: ${updated.id}`));
     if (updated.priority) console.log(chalk.gray(`  Priority: `) + chalk.yellow(updated.priority));
     if (updated.estimate !== undefined) console.log(chalk.gray(`  Estimate: ${updated.estimate}`));
+    if (updated.epic) console.log(chalk.gray(`  Epic: ${updated.epic}`));
     if (updated.labels && updated.labels.length) console.log(chalk.gray(`  Labels: ${updated.labels.join(', ')}`));
     if (updated.description) {
       console.log();

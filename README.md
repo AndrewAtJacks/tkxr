@@ -7,7 +7,9 @@ tkxr is a lightweight, file-based ticket manager that lives inside your repo. It
 - an **MCP server** (stdio bin + HTTP `/mcp` endpoint) so AI agents can drive it,
 - optional **per-ticket and per-sprint git worktrees** so multiple agents can work concurrently without stepping on each other.
 
-Tickets and comments are stored as chunked NDJSON, sprints and users as JSON, all under `./tkxr/` in the working directory. Everything is text you can `git diff`.
+Tickets and comments are stored as chunked NDJSON, sprints, epics and users as JSON, all under `./tkxr/` in the working directory. Everything is text you can `git diff`.
+
+A **sprint is the workspace** — the board is always scoped to exactly one, and you pick or create one before you get a board at all. **Epics** are the grouping *inside* that workspace (features, initiatives, themes). See [Sprints vs epics](#sprints-vs-epics).
 
 ---
 
@@ -43,8 +45,9 @@ pnpm dlx @legdev/tkxr serve
 
 # 2. Or use the CLI directly
 tkxr user create alice "Alice"
-tkxr sprint create "Sprint 1" --goal "Ship auth"
-tkxr create task "Wire up login form" --sprint spr-abc123 --priority high
+tkxr sprint create "Sprint 1" --goal "Ship auth"     # the workspace
+tkxr epic create "Auth" --sprint spr-abc123          # a group inside it
+tkxr create task "Wire up login form" --sprint spr-abc123 --epic epi-abc123 --priority high
 tkxr status tas-abc12345 progress
 tkxr comments tas-abc12345 --add --author alice --content "PR up for review"
 ```
@@ -60,8 +63,28 @@ Data lands in `./tkxr/`. Commit it like any other source file.
 | Ticket (task) | `tas-`    | `tkxr/tickets/tickets-XXXX.ndjson`         | one JSON object per line |
 | Ticket (bug)  | `bug-`    | `tkxr/tickets/tickets-XXXX.ndjson`         | same shape, different type |
 | Comment       | `com-`    | `tkxr/comments/comments-XXXX.ndjson`       | linked by `ticketId` |
-| Sprint        | `spr-`    | `tkxr/sprints.json`                        | one file |
+| Sprint        | `spr-`    | `tkxr/sprints.json`                        | one file; the workspace frame |
+| Epic          | `epi-`    | `tkxr/epics.json`                          | one file; groups tickets inside a sprint |
 | User          | `use-`    | `tkxr/users.json`                          | one file |
+
+### Sprints vs epics
+
+A **sprint wraps the whole workspace**. The board, list, sidebar counts and
+triage are all scoped to the one active sprint; switching sprints is its own
+view, not a filter chip. Tickets and epics carry a `sprint` field, and anything
+without one lands in the built-in **Unsorted** workspace (`sprint=none`) so it
+stays reachable rather than disappearing behind the gate.
+
+An **epic groups tickets within that workspace** — the role sprints used to
+play. Epics have a name, optional description/goal/color, a `planning | active
+| completed` status, and a `sprint`. Tickets carry an `epic` field; the sidebar
+lists the current workspace's epics and clicking one filters the board.
+`epic=none` matches ungrouped tickets.
+
+Deleting either entity is non-destructive to tickets: deleting a sprint clears
+`sprint` on its tickets (they fall back to Unsorted) and detaches its epics;
+deleting an epic clears `epic` on its tickets (they stay in their sprint,
+ungrouped).
 
 ### Ticket statuses (5-column board)
 
@@ -75,6 +98,10 @@ backlog → progress → review → done
 ### Sprint statuses
 
 `planning → active → completed`. Completing a sprint that owns a worktree automatically removes the worktree.
+
+### Epic statuses
+
+`planning → active → completed` — same triple as sprints, set via `tkxr epic status <id> <status>`, the Epic panel, or the MCP `edit_epic` tool. Status is presentational grouping only; it does not gate ticket edits.
 
 ### Users & per-user color
 
@@ -90,12 +117,20 @@ Tickets can declare inter-ticket blockers via `dependsOn: string[]`. Read tools 
 
 Open `http://localhost:8080` after `tkxr serve`.
 
-Layout:
+A sprint is required to reach the board. With no active workspace you land on
+the **sprint switcher** instead: a full view listing every sprint with its
+ticket counts, plus a create form and — when it holds anything — an
+**Unsorted** entry for tickets that have no sprint. Pick one and the board
+opens scoped to it; the choice persists in `localStorage`. The sidebar's
+**Switch** button returns to that view.
 
-- **Left sidebar** — sprints, users, view switcher, theme toggle, command palette, AI Triage. Drag a ticket onto a sprint or user row to reassign.
+Layout (once a workspace is active):
+
+- **Left sidebar** — workspace header (active sprint + Switch), epics, users, view switcher, theme toggle, command palette, AI Triage. Drag a ticket onto an epic or user row to reassign.
 - **Toolbar** — context title, search box, type filter, sort selector, "New ticket" button.
-- **Main view** — either the 5-column **Board** or the **List** view. Board columns match the 5 statuses; drag between columns to move a ticket. Each column has an inline quick-add.
-- **Sprint strip** — appears above the view when a sprint is selected, showing `done / total` story points.
+- **Main view** — either the 5-column **Board** or the **List** view, scoped to the active sprint. Board columns match the 5 statuses; drag between columns to move a ticket. Each column has an inline quick-add. Cards and list rows show an epic chip.
+- **Sprint strip** — sits above the view for the active workspace, showing `done / total` story points.
+- **Epic panel** — slide-in CRUD for an epic (name, description, goal, color, status, sprint), reached from the sidebar epic row.
 
 ### Search + infinite scroll
 
@@ -134,7 +169,7 @@ The CLI reads storage directly, so `tkxr list` is untouched by the
 paging change. External HTTP consumers that hit `GET /api/tickets`
 without any paging query parameters continue to receive the full
 `Ticket[]` array (see the REST API section for the paged contract).
-- **Workspace panel** — a slide-in panel on the right for the currently selected ticket, sprint, user, or the AI Triage report. Never modal; you can keep the board visible behind it.
+- **Workspace panel** — a slide-in panel on the right for the currently selected ticket, sprint, epic, user, or the AI Triage report. Never modal; you can keep the board visible behind it.
 - **Command palette** — Cmd/Ctrl-K, full-text ticket search, quick actions, natural-language ticket draft ("critical bug: login crash for @alice").
 
 ### Keyboard shortcuts
@@ -169,19 +204,21 @@ All commands accept `--help`. The most common are listed below.
 tkxr create task "Wire up login" \
   --description "OAuth first, password fallback later" \
   --priority high --estimate 3 \
-  --sprint spr-abc12345 --assignee alice
+  --sprint spr-abc12345 --epic epi-abc12345 --assignee alice
 
 tkxr new bug "Dashboard crashes on empty state"       # alias for `create bug`
 
 tkxr list                                              # all tickets
 tkxr list tasks                                        # only tasks
 tkxr list --status progress --sort-by priority
-tkxr list --search "login" --verbose                   # -v shows assignee + sprint names
-tkxr list --sprint spr-abc12345
+tkxr list --search "login" --verbose                   # -v shows assignee + sprint + epic names
+tkxr list --sprint spr-abc12345                        # or --sprint none
+tkxr list --epic epi-abc12345                          # or --epic none (ungrouped)
 
-tkxr show tas-abc12345                                 # polymorphic: also accepts spr- and use- ids
+tkxr show tas-abc12345                                 # polymorphic: also accepts spr-, epi- and use- ids
 tkxr status tas-abc12345 review                        # backlog|progress|review|blocked|done
 tkxr edit tas-abc12345 --priority critical --add-label backend
+tkxr edit tas-abc12345 --epic epi-abc12345             # or --clear-epic
 tkxr delete tas-abc12345 --force
 ```
 
@@ -203,16 +240,35 @@ tkxr user assign tas-abc12345 alice
 tkxr user assign tas-abc12345 --unassign
 ```
 
-### Sprints
+### Sprints (workspaces)
 
 ```bash
 tkxr sprints
 tkxr sprint create "Sprint 1" --goal "Ship auth"
 tkxr sprint status spr-abc12345 active                # planning|active|completed
 tkxr sprint edit spr-abc12345 --name "Auth Sprint" --end-date 2026-08-01
-tkxr sprint set tas-abc12345 spr-abc12345             # attach ticket to sprint
-tkxr sprint set tas-abc12345 --unset                  # detach
+tkxr sprint set tas-abc12345 spr-abc12345             # move ticket into workspace
+tkxr sprint set tas-abc12345 --unset                  # back to Unsorted
 ```
+
+### Epics (grouping within a workspace)
+
+```bash
+tkxr epics                                            # name, status, sprint, done/total
+tkxr epics --sprint spr-abc12345                      # or --sprint none
+tkxr epics --status active
+
+tkxr epic create "Auth" --sprint spr-abc12345 --goal "Ship SSO" --color "#7c3aed"
+tkxr epic status epi-abc12345 completed               # planning|active|completed
+tkxr epic edit epi-abc12345 --name "Auth & SSO" --sprint spr-def45678
+tkxr epic edit epi-abc12345 --clear-sprint
+tkxr epic set tas-abc12345 epi-abc12345               # attach ticket to epic
+tkxr epic set tas-abc12345 --unset                    # ungroup
+tkxr delete epi-abc12345 --force                      # ungroups its tickets, keeps them
+```
+
+`epic set` warns when the ticket's sprint differs from the epic's — the board is
+sprint-scoped, so such a ticket would not appear under the epic you filed it in.
 
 ### Worktrees
 
@@ -320,13 +376,15 @@ curl http://localhost:8080/api/mcp/guide     # markdown agent guide
 
 ### Available MCP tools
 
-Read: `agent_guide`, `list_tickets`, `get_ticket`, `search_tickets`, `list_users`, `get_user`, `list_sprints`, `get_sprint`, `list_comments`, `list_worktrees`.
+Read: `agent_guide`, `list_tickets`, `get_ticket`, `search_tickets`, `list_users`, `get_user`, `list_sprints`, `get_sprint`, `list_epics`, `get_epic`, `list_comments`, `list_worktrees`.
 
-Ticket mutations: `create_ticket`, `edit_ticket`, `update_ticket_status`, `assign_ticket`, `set_ticket_sprint`, `delete_ticket`.
+Ticket mutations: `create_ticket`, `edit_ticket`, `update_ticket_status`, `assign_ticket`, `set_ticket_sprint`, `set_ticket_epic`, `delete_ticket`.
 
 Comment mutations: `add_comment`, `delete_comment`.
 
 Sprint mutations: `create_sprint`, `edit_sprint`, `update_sprint_status`, `delete_sprint`.
+
+Epic mutations: `create_epic`, `edit_epic`, `delete_epic`.
 
 User mutations: `create_user`, `edit_user`, `delete_user`.
 
@@ -381,13 +439,29 @@ tkxr/
 │   ├── comments-0001.ndjson
 │   └── comments-0002.ndjson
 ├── sprints.json
+├── epics.json
 └── users.json
 ```
 
 Example NDJSON ticket line:
 
 ```json
-{"id":"tas-abc12345","type":"task","title":"Wire up login","status":"progress","assignee":"use-alice001","sprint":"spr-abc12345","estimate":3,"priority":"high","dependsOn":[],"worktree":{"path":"...","branch":"tkxr/tas-abc12345","createdAt":"..."},"createdAt":"...","updatedAt":"..."}
+{"id":"tas-abc12345","type":"task","title":"Wire up login","status":"progress","assignee":"use-alice001","sprint":"spr-abc12345","epic":"epi-abc12345","estimate":3,"priority":"high","dependsOn":[],"worktree":{"path":"...","branch":"tkxr/tas-abc12345","createdAt":"..."},"createdAt":"...","updatedAt":"..."}
+```
+
+Example epic (`tkxr/epics.json` holds an array of these):
+
+```json
+{
+  "id": "epi-abc12345",
+  "name": "Auth",
+  "goal": "Ship SSO",
+  "status": "active",
+  "color": "#7c3aed",
+  "sprint": "spr-abc12345",
+  "createdAt": "...",
+  "updatedAt": "..."
+}
 ```
 
 Example user:
@@ -438,6 +512,12 @@ PUT    /api/sprints/:id
 PUT    /api/sprints/:id/status
 DELETE /api/sprints/:id
 
+# Epics
+GET    /api/epics                        (?sprint=<id> to scope to one workspace)
+POST   /api/epics
+PUT    /api/epics/:id
+DELETE /api/epics/:id
+
 # Worktrees
 GET    /api/worktrees
 POST   /api/tickets/:id/worktree
@@ -474,7 +554,7 @@ paging query parameter is present:
 - **No paging params** — returns the legacy `Ticket[]` array (used by the
   CLI's `list` command via `storage.getAllTickets()` and any external
   script that hard-codes the pre-2.1 shape).
-- **Any of `limit | cursor | q | sprint | assignee | type | status | sortBy` present** —
+- **Any of `limit | cursor | q | sprint | epic | assignee | type | status | sortBy` present** —
   returns `{ items: Ticket[], nextCursor: string | null, total: number }`.
 
 | Param      | Type                                                 | Notes                                                                 |
@@ -482,7 +562,8 @@ paging query parameter is present:
 | `limit`    | positive number (default `50`, hard cap `200`)       | Rejects `0` / negative / non-numeric with `400 bad_input`.            |
 | `cursor`   | opaque base64url string (from a previous `nextCursor`)| Passing an unknown/expired cursor is treated as "start from the top". |
 | `q`        | string                                               | Case-insensitive substring match over title + description.            |
-| `sprint`   | sprint id or the literal `none`                      | `none` matches tickets with no sprint.                                |
+| `sprint`   | sprint id or the literal `none`                      | `none` matches tickets with no sprint (the Unsorted workspace).       |
+| `epic`     | epic id or the literal `none`                        | `none` matches tickets with no epic (ungrouped).                      |
 | `assignee` | user id or the literal `none`                        | `none` matches unassigned tickets.                                    |
 | `type`     | `task` \| `bug`                                      | Anything else → `400 bad_input`.                                      |
 | `status`   | `backlog` \| `progress` \| `review` \| `blocked` \| `done` | Anything else → `400 bad_input`.                                |
@@ -506,6 +587,11 @@ curl "http://localhost:8080/api/tickets?limit=25&status=backlog&sortBy=priority"
 WS event (coalesced 500ms), so badges + the triage pill stay honest
 even when the paged list only holds a slice of tickets.
 
+`?sprint=<id>` (or the literal `none`) scopes `counts`, `triage`, `byStatus`,
+`byEpic` and `byAssignee` to that workspace, matching the sprint-scoped board.
+`bySprint` is deliberately always project-wide — the sprint switcher needs
+cross-workspace totals.
+
 ```json
 {
   "counts": {
@@ -527,7 +613,10 @@ even when the paged list only holds a slice of tickets.
     "review": 3,
     "blocked": 1,
     "done": 89
-  }
+  },
+  "byEpic":     { "none": 12, "epi-abc12345": 130 },
+  "byAssignee": { "none": 6,  "use-alice001": 136 },
+  "bySprint":   { "none": 4,  "spr-abc12345": 142 }
 }
 ```
 
@@ -546,6 +635,7 @@ ws.onmessage = (ev) => {
   // type ∈ ticket_created | ticket_updated | ticket_deleted
   //      | comment_created | comment_deleted
   //      | sprint_created | sprint_updated | sprint_deleted
+  //      | epic_created | epic_updated | epic_deleted
   //      | user_created | user_updated | user_deleted
   //      | claude_run_started | claude_run_chunk | claude_run_exit
 };
@@ -645,7 +735,7 @@ POST /api/claude/cancel  body: { runId }
 
 #### WebSocket events
 
-In addition to the existing `ticket_*` / `sprint_*` / `user_*` / `comment_*`
+In addition to the existing `ticket_*` / `sprint_*` / `epic_*` / `user_*` / `comment_*`
 broadcasts, a live `claude` run emits three event types, all keyed by
 `runId`:
 
