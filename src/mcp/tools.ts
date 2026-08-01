@@ -55,6 +55,23 @@ async function resolveUserId(storage: ProjectStorage, ref: string): Promise<stri
   return byUsername?.id || null;
 }
 
+// A dangling sprint or epic reference never errors downstream — it just hides
+// the row. The board is scoped to one sprint, so a ticket pointing at an
+// unknown sprint falls out of every workspace, and one pointing at an unknown
+// epic shows under neither that epic nor "No epic" (that bucket keys off a
+// falsy `epic`). The CLI validates these on every path that accepts them; these
+// helpers give the MCP tools the same guarantee. Return an error string, or
+// null when the ref resolves.
+async function badSprintRef(storage: ProjectStorage, id: string): Promise<string | null> {
+  const sprints = await storage.getSprints();
+  return sprints.some(s => s.id === id) ? null : `Sprint "${id}" not found`;
+}
+
+async function badEpicRef(storage: ProjectStorage, id: string): Promise<string | null> {
+  const epics = await storage.getEpics();
+  return epics.some(e => e.id === id) ? null : `Epic "${id}" not found`;
+}
+
 export const AGENT_GUIDE = `# tkxr — Agent Guide
 
 tkxr is an in-repo ticket manager. Data is stored under \`./tkxr/\` in the working directory
@@ -91,11 +108,17 @@ mutate the project state without shelling out.
 - \`update_ticket_status\` — the fastest way to move a card. Emits a WebSocket broadcast
   so the web UI live-refreshes.
 - \`assign_ticket\` — set or clear the assignee. Accepts a User id or a bare username.
-- \`set_ticket_sprint\` — add/remove a ticket from a sprint (workspace).
+- \`set_ticket_sprint\` — add/remove a ticket from a sprint (workspace). Pass
+  \`sprintId\` to attach or \`unset: true\` to remove; passing neither is an error.
 - \`set_ticket_epic\` — add/remove a ticket from an epic (grouping within the sprint).
+  Same \`epicId\` / \`unset\` contract.
+- Every \`sprint\` / \`epic\` reference you pass to a write tool is validated — an
+  unknown id is rejected rather than stored, since a dangling ref silently hides
+  the row from every board view instead of surfacing an error.
 - \`add_comment\` — thread a comment. Author must be a User id or a resolvable username.
 - \`create_sprint\` / \`edit_sprint\` / \`update_sprint_status\` — sprint lifecycle.
-- \`create_epic\` / \`edit_epic\` / \`delete_epic\` — epic lifecycle. \`list_epics\` / \`get_epic\` read them.
+- \`create_epic\` / \`edit_epic\` / \`delete_epic\` — epic lifecycle. \`list_epics\` / \`get_epic\` read them;
+  \`list_epics\` accepts \`sprint: "none"\` for epics attached to no sprint.
 - \`create_user\` / \`edit_user\` — people.
 
 ## Read tools
@@ -425,8 +448,16 @@ export const TOOLS: ToolDef[] = [
       const opts: Partial<Ticket> = {};
       if (args.description !== undefined) opts.description = args.description;
       if (assigneeId) opts.assignee = assigneeId;
-      if (args.sprint) opts.sprint = args.sprint;
-      if (args.epic) opts.epic = args.epic;
+      if (args.sprint) {
+        const bad = await badSprintRef(storage, args.sprint);
+        if (bad) return errorResult(bad);
+        opts.sprint = args.sprint;
+      }
+      if (args.epic) {
+        const bad = await badEpicRef(storage, args.epic);
+        if (bad) return errorResult(bad);
+        opts.epic = args.epic;
+      }
       if (args.priority) opts.priority = args.priority;
       if (args.estimate !== undefined) opts.estimate = args.estimate;
       if (args.labels) opts.labels = args.labels;
@@ -478,8 +509,16 @@ export const TOOLS: ToolDef[] = [
       if (args.priority !== undefined) patch.priority = args.priority;
       if (args.estimate !== undefined) patch.estimate = args.estimate;
       if (args.assignee !== undefined) patch.assignee = await resolveUserId(storage, args.assignee);
-      if (args.sprint !== undefined) patch.sprint = args.sprint;
-      if (args.epic !== undefined) patch.epic = args.epic;
+      if (args.sprint !== undefined) {
+        const bad = await badSprintRef(storage, args.sprint);
+        if (bad) return errorResult(bad);
+        patch.sprint = args.sprint;
+      }
+      if (args.epic !== undefined) {
+        const bad = await badEpicRef(storage, args.epic);
+        if (bad) return errorResult(bad);
+        patch.epic = args.epic;
+      }
       if (args.clearDescription) patch.description = undefined;
       if (args.clearPriority) patch.priority = undefined;
       if (args.clearEstimate) patch.estimate = undefined;
@@ -567,6 +606,12 @@ export const TOOLS: ToolDef[] = [
       required: ['id'],
     },
     handler: async ({ id, sprintId, unset }, { storage, broadcast }) => {
+      // Same guard as set_ticket_epic — neither arg used to mean "clear".
+      if (!unset && !sprintId) return errorResult('Provide sprintId to attach, or unset:true to remove');
+      if (!unset) {
+        const bad = await badSprintRef(storage, sprintId);
+        if (bad) return errorResult(bad);
+      }
       const patch: any = unset ? { sprint: null } : { sprint: sprintId };
       const updated = await storage.updateTicket(id, patch);
       if (!updated) return errorResult(`Ticket "${id}" not found`);
@@ -738,13 +783,18 @@ export const TOOLS: ToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        sprint: { type: 'string', description: 'Filter epics to a single sprint (workspace) id.' },
+        sprint: { type: 'string', description: 'Filter epics to a single sprint (workspace) id. Use "none" for epics not in a sprint.' },
         status: { type: 'string', enum: [...EPIC_STATUSES] },
       },
     },
     handler: async ({ sprint, status }, { storage }) => {
       let epics = await storage.getEpics();
-      if (sprint) epics = epics.filter(e => e.sprint === sprint);
+      // `none` matches the sentinel the REST/CLI epic filters already accept.
+      if (sprint) {
+        epics = sprint === 'none'
+          ? epics.filter(e => !e.sprint)
+          : epics.filter(e => e.sprint === sprint);
+      }
       if (status) epics = epics.filter(e => e.status === status);
       const tickets = await storage.getAllTickets();
       const enriched = epics.map(e => {
@@ -792,7 +842,11 @@ export const TOOLS: ToolDef[] = [
       if (args.goal) opts.goal = args.goal;
       if (args.color) opts.color = args.color;
       if (args.status) opts.status = args.status;
-      if (args.sprint) opts.sprint = args.sprint;
+      if (args.sprint) {
+        const bad = await badSprintRef(storage, args.sprint);
+        if (bad) return errorResult(bad);
+        opts.sprint = args.sprint;
+      }
       const epic = await storage.createEpic(args.name, opts);
       broadcast?.({ type: 'epic_created', data: epic });
       return jsonResult(epic);
@@ -824,7 +878,11 @@ export const TOOLS: ToolDef[] = [
       if (args.goal !== undefined) patch.goal = args.goal;
       if (args.color !== undefined) patch.color = args.color;
       if (args.status !== undefined) patch.status = args.status;
-      if (args.sprint !== undefined) patch.sprint = args.sprint;
+      if (args.sprint !== undefined) {
+        const bad = await badSprintRef(storage, args.sprint);
+        if (bad) return errorResult(bad);
+        patch.sprint = args.sprint;
+      }
       if (args.clearDescription) patch.description = undefined;
       if (args.clearGoal) patch.goal = undefined;
       if (args.clearSprint) patch.sprint = undefined;
@@ -865,6 +923,14 @@ export const TOOLS: ToolDef[] = [
       required: ['id'],
     },
     handler: async ({ id, epicId, unset }, { storage, broadcast }) => {
+      // Both args are optional in the schema, so a call with neither used to
+      // fall through to `{ epic: undefined }` and silently clear the epic.
+      // Make the caller say which they meant.
+      if (!unset && !epicId) return errorResult('Provide epicId to attach, or unset:true to remove');
+      if (!unset) {
+        const bad = await badEpicRef(storage, epicId);
+        if (bad) return errorResult(bad);
+      }
       const patch: any = unset ? { epic: null } : { epic: epicId };
       const updated = await storage.updateTicket(id, patch);
       if (!updated) return errorResult(`Ticket "${id}" not found`);

@@ -258,6 +258,9 @@
           // bus (with 500ms coalescing), so nothing to do for that here.
           if (m.type === 'ticket_created' || m.type === 'ticket_updated' || m.type === 'ticket_deleted') {
             pagedTickets.applyEvent(m);
+            // The burn strip reads its own scoped slice, so it isn't covered by
+            // `applyEvent` — re-sum it whenever ticket data moves.
+            if (activeSprint && !isUnsorted) fetchBurn(activeSprint);
             return;
           }
           // Sprint/user events still trigger the bulk reference-data refresh
@@ -332,21 +335,43 @@
     return workspaceSprint?.goal || '';
   })();
 
-  // Sprint burn strip
-  // NOTE: `$ticketStore` now mirrors the *current page* of the paged store, not
-  // the full server-side dataset. When the active sprint is filtered in the
-  // toolbar, the current page is already scoped to that sprint so this reads
-  // correctly; when it isn't, this can under-count. tas-z-8q_Ljc will move the
-  // burn strip to the `/api/tickets/summary` endpoint (tas-4MNJ9qP5) — no
-  // client-side sum needed then.
-  $: burn = (() => {
-    // Unsorted isn't a real sprint — there's nothing to burn down.
-    if (!activeSprint || isUnsorted) return null;
-    const scoped = ($ticketStore as Ticket[]).filter(t => t.sprint === activeSprint);
-    const total = scoped.reduce((s, t) => s + (t.estimate || 0), 0);
-    const done = scoped.filter(t => t.status === 'done').reduce((s, t) => s + (t.estimate || 0), 0);
-    return { done, total };
-  })();
+  // Sprint burn strip.
+  // `$ticketStore` can't back this: it's the paged slice, and since epics
+  // landed it's *epic-filtered* too — summing it reported the active epic's
+  // points under a "sprint progress" label. Fetch the workspace's own slice,
+  // the way SprintPanel/EpicPanel do. Still capped at the same 200 as those
+  // panels, so very large sprints under-count; tas-4MNJ9qP5 adds points to
+  // `/api/tickets/summary`, which is the real fix.
+  let burn: { done: number; total: number } | null = null;
+  let burnAbort: AbortController | null = null;
+
+  async function fetchBurn(sprintId: string) {
+    if (burnAbort) burnAbort.abort();
+    const ac = new AbortController();
+    burnAbort = ac;
+    try {
+      const res = await fetch(`/api/tickets?sprint=${encodeURIComponent(sprintId)}&limit=200`, { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      const scoped = items.map(normalizeTicket) as Ticket[];
+      burn = {
+        total: scoped.reduce((s, t) => s + (t.estimate || 0), 0),
+        done: scoped.filter(t => t.status === 'done').reduce((s, t) => s + (t.estimate || 0), 0),
+      };
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+      // noop — strip keeps its previous numbers
+    } finally {
+      if (burnAbort === ac) burnAbort = null;
+    }
+  }
+
+  // Unsorted isn't a real sprint — there's nothing to burn down.
+  $: if (browser) {
+    if (!activeSprint || isUnsorted) burn = null;
+    else fetchBurn(activeSprint);
+  }
 
   // Triage findings count (rough, drives sidebar pill).
   // NOTE: same paged-store caveat as `burn` above — this is only fully accurate
