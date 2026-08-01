@@ -172,12 +172,56 @@ async function checkBranchExists(branch: string, cwd: string): Promise<boolean> 
   }
 }
 
+/**
+ * The repo's default branch, resolved from `origin/HEAD` where it's set and
+ * falling back to whichever of main/master exists. Null when neither is found
+ * (a repo with no conventional trunk) — callers should treat that as "can't
+ * tell" rather than assuming anything is merged.
+ */
+export async function getDefaultBranch(repoRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await run('git symbolic-ref --quiet refs/remotes/origin/HEAD', repoRoot);
+    const ref = stdout.trim().replace(/^refs\/remotes\//, '');
+    if (ref) return ref;
+  } catch { /* origin/HEAD not set — fall through */ }
+  for (const candidate of ['main', 'master']) {
+    if (await checkBranchExists(candidate, repoRoot)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * True when `branch` holds no commits missing from the repo's trunk — i.e.
+ * deleting it discards nothing. Returns false when the answer can't be
+ * established, so an unknown always resolves to "keep the branch".
+ */
+export async function isBranchMerged(branch: string, repoRoot: string): Promise<boolean> {
+  const base = await getDefaultBranch(repoRoot);
+  if (!base || base === branch) return false;
+  try {
+    const { stdout } = await run(`git rev-list --count ${base}..${branch}`, repoRoot);
+    return stdout.trim() === '0';
+  } catch {
+    return false;
+  }
+}
+
 export interface RemoveWorktreeOptions {
   path: string;
   force?: boolean;
   keepBranch?: boolean;
   branch?: string;
   cwd?: string;
+}
+
+/** True when the worktree directory no longer exists on disk. */
+async function worktreeDirGone(wtPath: string): Promise<boolean> {
+  try {
+    await fs.stat(wtPath);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 export async function removeWorktree(opts: RemoveWorktreeOptions): Promise<void> {
@@ -191,13 +235,47 @@ export async function removeWorktree(opts: RemoveWorktreeOptions): Promise<void>
   try {
     await run(`git worktree remove ${forceFlag} ${quoted}`.replace(/\s+/g, ' ').trim(), repoRoot);
   } catch (err: any) {
-    // If already gone / stale, prune to reconcile.
-    await run('git worktree prune', repoRoot).catch(() => {});
+    // Only prune when the directory is genuinely gone — i.e. this failed
+    // because git and the filesystem had already diverged.
+    //
+    // Pruning unconditionally here is what used to orphan a half-removed
+    // worktree: `git worktree remove` can delete much of the tree (including
+    // the `.git` file) and then fail on, say, a locked file under
+    // node_modules. Prune then sees a worktree whose `.git` file is missing
+    // and drops its admin entry, finalising the very removal that failed. The
+    // result is a directory git no longer tracks and `git worktree repair`
+    // cannot recover. Leave a partial failure alone so the caller can retry
+    // with force, or clean up by hand.
+    if (await worktreeDirGone(opts.path)) {
+      await run('git worktree prune', repoRoot).catch(() => {});
+    }
     throw new Error(`git worktree remove failed: ${(err.stderr || err.message || '').trim()}`);
   }
   await run('git worktree prune', repoRoot).catch(() => {});
   if (opts.branch && !opts.keepBranch) {
-    // Best-effort branch delete; don't fail the whole op if the branch has unmerged commits.
-    await run(`git branch -D ${opts.branch}`, repoRoot).catch(() => {});
+    // `-d`, not `-D`: refuse to delete a branch holding unmerged commits.
+    // The old force-delete discarded them outright — losing work whenever a
+    // ticket was completed before its branch was merged or pushed.
+    try {
+      await run(`git branch -d ${opts.branch}`, repoRoot);
+    } catch (err: any) {
+      // Unmerged (or otherwise undeletable) — keep the branch and say so.
+      // The worktree is already gone at this point, which is what was asked;
+      // the branch surviving is the safe outcome, not a failure.
+      throw new BranchKeptError(opts.branch, (err.stderr || err.message || '').trim());
+    }
+  }
+}
+
+/**
+ * Thrown when the worktree was removed successfully but its branch was kept
+ * because it still holds unmerged commits. Callers that treat worktree removal
+ * as best-effort should catch this and surface it rather than failing the
+ * whole operation — the destructive part already succeeded safely.
+ */
+export class BranchKeptError extends Error {
+  constructor(public branch: string, public detail: string) {
+    super(`Worktree removed, but branch "${branch}" was kept: it has unmerged commits.`);
+    this.name = 'BranchKeptError';
   }
 }
