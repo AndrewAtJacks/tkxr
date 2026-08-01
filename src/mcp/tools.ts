@@ -176,6 +176,10 @@ different tickets simultaneously without stepping on each other's branch state.
   \`branchKept\` — removal never discards unlanded work.
 - \`list_worktrees\` — mirrors \`git worktree list\`.
 
+Status changes never remove a worktree. Setting a ticket to \`done\` (or a sprint
+to \`completed\`) leaves the directory and branch untouched — call
+\`remove_worktree\` explicitly when you actually want it gone.
+
 If you're about to work on a ticket and \`ticket.worktree\` is null, consider
 creating one first — then \`cd\` into it and do the work there. Commits inside a
 worktree are just regular commits on that branch; push and PR as normal.

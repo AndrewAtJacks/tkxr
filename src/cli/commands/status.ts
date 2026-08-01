@@ -3,6 +3,7 @@ import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
 import type { TicketStatus } from '../../core/types.js';
 import { notifier } from '../../core/notifier.js';
+import { getRepoRoot, isBranchMerged, isGitRepo } from '../../core/worktree.js';
 
 interface StatusArgs extends minimist.ParsedArgs {}
 
@@ -58,6 +59,24 @@ export async function updateTicketStatus(args: StatusArgs): Promise<void> {
     console.log(`  Title: ${updatedTicket.title}`);
     console.log(`  Status: ${statusColor(updatedTicket.status)}`);
     console.log(`  Updated: ${updatedTicket.updatedAt.toLocaleString()}`);
+
+    // `done` used to delete the worktree outright. It now just points at the
+    // command, and says whether the branch has landed so you know if removing
+    // it would drop anything.
+    if (updatedTicket.status === 'done' && updatedTicket.worktree) {
+      const wt = updatedTicket.worktree;
+      console.log();
+      try {
+        const merged = (await isGitRepo())
+          && (await isBranchMerged(wt.branch, await getRepoRoot()));
+        console.log(chalk.dim(merged
+          ? `Worktree still open at ${wt.path} (${wt.branch} is merged).`
+          : `Worktree still open at ${wt.path} (${wt.branch} has unmerged commits).`));
+      } catch {
+        console.log(chalk.dim(`Worktree still open at ${wt.path}.`));
+      }
+      console.log(chalk.dim(`Close it with: tkxr worktree remove ${updatedTicket.id}`));
+    }
   } catch (error) {
     console.log(chalk.red(`Error updating ticket status: ${error instanceof Error ? error.message : 'Unknown error'}`));
   }

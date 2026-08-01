@@ -97,7 +97,7 @@ backlog → progress → review → done
 
 ### Sprint statuses
 
-`planning → active → completed`. Completing a sprint that owns a worktree automatically removes the worktree.
+`planning → active → completed`. Completing a sprint leaves its worktree alone — remove it explicitly with `tkxr worktree remove <sprint-id>`.
 
 ### Epic statuses
 
@@ -421,14 +421,16 @@ When the ticket is merged (via your normal PR flow):
 tkxr worktree remove tas-abc12345
 ```
 
-Moving a ticket to `done` also removes its worktree — but **only once the branch
-is merged into the default branch**. While the branch still holds unlanded
-commits the worktree is left alone, so marking a ticket done at the end of a
-review doesn't delete the checkout the review ran in. Clean it up explicitly
-with `tkxr worktree remove <id>` once the branch has landed or been abandoned.
+**Status changes never touch worktrees.** Moving a ticket to `done` (or a sprint
+to `completed`) only changes the status — it will not delete a directory or a
+branch. `done` fires from the CLI, MCP, the REST API and a plain board drag, so
+anything destructive hanging off it would be triggered by dragging a card.
+Removing a worktree is always something you ask for. `tkxr status <id> done`
+does print a reminder that the worktree is still open, and whether its branch
+has been merged.
 
-Branch deletion is never destructive: `worktree remove` deletes the branch only
-when it is fully merged, and otherwise keeps it and tells you. Use
+Branch deletion is never destructive either: `worktree remove` deletes the
+branch only when it is fully merged, and otherwise keeps it and tells you. Use
 `git branch -D <branch>` if you really want to discard unmerged work.
 
 For a sprint (fan-out to multiple agents):
@@ -439,7 +441,8 @@ tkxr worktree create spr-abc12345
 tkxr worktree create tas-111
 tkxr worktree create tas-222
 # ... agents work concurrently ...
-tkxr sprint status spr-abc12345 completed   # auto-removes the sprint worktree
+tkxr sprint status spr-abc12345 completed   # status only — worktrees stay put
+tkxr worktree remove spr-abc12345           # clean up when you're ready
 ```
 
 ---
