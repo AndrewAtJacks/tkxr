@@ -2,7 +2,6 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { nanoid } from 'nanoid';
 import type { Ticket, Sprint, Epic, User, TicketType, TicketStatus, TicketComment } from './types.js';
-import { getRepoRoot, isBranchMerged, isGitRepo, removeWorktree } from './worktree.js';
 
 // --- queryTickets support -----------------------------------------------------
 // Kept in this file (rather than types.ts) because they describe the *storage*
@@ -236,21 +235,10 @@ export class ProjectStorage {
     sprint.updatedAt = new Date();
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
 
-    // Auto-close sprint worktree when moved to completed (best effort, keep the branch —
-    // it may still be pending an upstream merge / PR).
-    if (sprint.status === 'completed' && sprint.worktree && updates.worktree === undefined) {
-      const wt = sprint.worktree;
-      try {
-        if (await isGitRepo()) {
-          await removeWorktree({ path: wt.path, branch: wt.branch, force: false, keepBranch: true });
-          sprint.worktree = null;
-          sprint.updatedAt = new Date();
-          await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
-        }
-      } catch {
-        // Dirty / already gone / locked — leave sprint.worktree as-is so the human sees + decides.
-      }
-    }
+    // NOTE: moving a sprint to `completed` used to delete its worktree here.
+    // Status changes no longer have destructive side effects — see the matching
+    // note in `updateTicket`. Remove it explicitly with
+    // `tkxr worktree remove <sprint-id>`.
 
     return sprint;
   }
@@ -784,59 +772,16 @@ export class ProjectStorage {
       if (updatedTicket) break;
     }
 
-    // Auto-close ticket worktree when moved to done (best effort, never blocks
-    // the status change) — but ONLY once the branch has actually landed.
-    //
-    // `done` fires from every surface: `tkxr status`, MCP, the REST endpoint,
-    // and a board drag into the Done column. It used to remove the worktree
-    // unconditionally, which meant a reviewer marking a ticket done as the last
-    // step of review deleted the checkout the review had just run in — and, via
-    // `git branch -D`, could discard unmerged commits with it. Gating on
-    // "merged into trunk" keeps the cleanup for genuinely finished work while
-    // leaving in-flight branches alone. `isBranchMerged` answers false whenever
-    // it can't tell, so the safe path is the default.
-    const done = updatedTicket as Ticket | null;
-    if (done && done.status === 'done' && done.worktree && updates.worktree === undefined) {
-      const wt = done.worktree;
-      try {
-        if (await isGitRepo()) {
-          const repoRoot = await getRepoRoot();
-          if (await isBranchMerged(wt.branch, repoRoot)) {
-            await removeWorktree({ path: wt.path, branch: wt.branch, force: false, keepBranch: false });
-            // Success — clear the reference in a second write.
-            updatedTicket = await this._clearWorktreeField(id, done) || done;
-          }
-          // Unmerged — keep the worktree. The human closes it out with
-          // `tkxr worktree remove <id>` once the branch is merged or abandoned.
-        }
-      } catch {
-        // Worktree dirty / already gone / branch kept — leave ticket.worktree as-is
-        // so the human sees "still has a worktree" and can decide.
-      }
-    }
+    // NOTE: moving a ticket to `done` used to delete its worktree here (and,
+    // via `git branch -D`, the branch with it). Status changes are not the
+    // place for destructive side effects: `done` fires from `tkxr status`, MCP,
+    // the REST endpoint and a plain board drag, so a reviewer closing out a
+    // ticket — or anyone dragging a card across a column — silently destroyed a
+    // checkout and any commits that hadn't landed. Removing a worktree is now
+    // always an explicit act: `tkxr worktree remove <id>`, the MCP
+    // `remove_worktree` tool, or the REST endpoint.
 
     return updatedTicket;
-  }
-
-  private async _clearWorktreeField(id: string, ticket: Ticket): Promise<Ticket | null> {
-    const chunkFiles = await this.getTicketChunkFiles();
-    let updated: Ticket | null = null;
-    for (const file of chunkFiles) {
-      const filePath = path.join(this.ticketsDir, file);
-      const content = await fs.readFile(filePath, 'utf8');
-      const lines = content.split('\n').filter(line => line.trim());
-      const newLines = lines.map(line => {
-        const t = JSON.parse(line);
-        if (t.id === id) {
-          updated = { ...t, worktree: null, updatedAt: new Date() };
-          return JSON.stringify(updated);
-        }
-        return line;
-      });
-      await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
-      if (updated) break;
-    }
-    return updated;
   }
 
   // Update ticket status
