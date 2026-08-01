@@ -291,7 +291,7 @@ tkxr worktree create spr-abc12345
 # → creates ../<repo>-worktrees/sprints/spr-abc12345 on branch tkxr/sprint/spr-abc12345.
 
 tkxr worktree list
-tkxr worktree remove tas-abc12345                     # deletes the dir + branch
+tkxr worktree remove tas-abc12345                     # deletes the dir + merged branch
 tkxr worktree remove tas-abc12345 --keep-branch       # keep the branch around
 tkxr worktree remove spr-abc12345 --force
 ```
@@ -420,6 +420,16 @@ When the ticket is merged (via your normal PR flow):
 ```bash
 tkxr worktree remove tas-abc12345
 ```
+
+Moving a ticket to `done` also removes its worktree — but **only once the branch
+is merged into the default branch**. While the branch still holds unlanded
+commits the worktree is left alone, so marking a ticket done at the end of a
+review doesn't delete the checkout the review ran in. Clean it up explicitly
+with `tkxr worktree remove <id>` once the branch has landed or been abandoned.
+
+Branch deletion is never destructive: `worktree remove` deletes the branch only
+when it is fully merged, and otherwise keeps it and tells you. Use
+`git branch -D <branch>` if you really want to discard unmerged work.
 
 For a sprint (fan-out to multiple agents):
 

@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
-import { createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree } from '../../core/worktree.js';
+import { BranchKeptError, createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree } from '../../core/worktree.js';
 
 interface WorktreeArgs extends minimist.ParsedArgs {
   _: string[];
@@ -114,6 +114,17 @@ export async function manageWorktree(args: WorktreeArgs): Promise<void> {
       console.log(`  Path:   ${wt.path}`);
       console.log(`  Branch: ${wt.branch}${args['keep-branch'] ? chalk.dim(' (kept)') : ' (deleted)'}`);
     } catch (err) {
+      // The worktree came off cleanly; only the branch delete was declined
+      // because it still holds unmerged commits. That's the safe outcome.
+      if (err instanceof BranchKeptError) {
+        const updated = await storage.updateTicket(ticketId, { worktree: null });
+        if (updated) await notifier.notifyTicketUpdated(updated);
+        console.log(chalk.green(`✓ Worktree removed`));
+        console.log(`  Path:   ${wt.path}`);
+        console.log(`  Branch: ${wt.branch}${chalk.yellow(' (kept — unmerged commits)')}`);
+        console.log(chalk.dim(`  Delete it anyway with: git branch -D ${wt.branch}`));
+        return;
+      }
       console.log(chalk.red(`Failed: ${err instanceof Error ? err.message : String(err)}`));
     }
     return;
@@ -180,6 +191,15 @@ async function sprintOp(sub: string, sprintId: string, args: WorktreeArgs, stora
       console.log(`  Path:   ${wt.path}`);
       console.log(`  Branch: ${wt.branch}${args['keep-branch'] ? chalk.dim(' (kept)') : ' (deleted)'}`);
     } catch (err) {
+      if (err instanceof BranchKeptError) {
+        const updated = await storage.updateSprint(sprintId, { worktree: null });
+        if (updated) await notifier.notifySprintUpdated(updated);
+        console.log(chalk.green(`✓ Sprint worktree removed`));
+        console.log(`  Path:   ${wt.path}`);
+        console.log(`  Branch: ${wt.branch}${chalk.yellow(' (kept — unmerged commits)')}`);
+        console.log(chalk.dim(`  Delete it anyway with: git branch -D ${wt.branch}`));
+        return;
+      }
       console.log(chalk.red(`Failed: ${err instanceof Error ? err.message : String(err)}`));
     }
     return;

@@ -1,6 +1,6 @@
 import type { ProjectStorage } from '../core/storage.js';
 import type { Epic, Sprint, Ticket, TicketStatus, User } from '../core/types.js';
-import { createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree } from '../core/worktree.js';
+import { BranchKeptError, createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree } from '../core/worktree.js';
 
 export type BroadcastEvent =
   | { type: 'ticket_created' | 'ticket_updated' | 'ticket_deleted' | 'sprint_created' | 'sprint_updated' | 'sprint_deleted' | 'epic_created' | 'epic_updated' | 'epic_deleted' | 'user_created' | 'user_updated' | 'user_deleted' | 'comment_created' | 'comment_deleted'; data: any };
@@ -171,7 +171,9 @@ different tickets simultaneously without stepping on each other's branch state.
   Sets \`ticket.worktree = { path, branch, createdAt }\` so anyone who fetches the
   ticket knows where to work.
 - \`remove_worktree\` — deletes the worktree directory + prunes git metadata. By
-  default also deletes the branch (pass \`keepBranch: true\` to keep it around).
+  default also deletes the branch (pass \`keepBranch: true\` to keep it around),
+  but a branch with unmerged commits is always kept and reported as
+  \`branchKept\` — removal never discards unlanded work.
 - \`list_worktrees\` — mirrors \`git worktree list\`.
 
 If you're about to work on a ticket and \`ticket.worktree\` is null, consider
@@ -1103,19 +1105,25 @@ export const TOOLS: ToolDef[] = [
       if (!sprint) return errorResult(`Sprint "${sprintId}" not found`);
       const wt = sprint.worktree;
       if (!wt) return errorResult(`Sprint has no worktree.`);
+      let branchKept: string | null = null;
       try {
         await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: repoCwd });
       } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
+        // Worktree gone, branch declined for unmerged commits — report it, but
+        // don't call the whole operation a failure.
+        if (!(err instanceof BranchKeptError)) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
+        branchKept = wt.branch;
       }
       const updated = await storage.updateSprint(sprintId, { worktree: null });
       if (updated) broadcast?.({ type: 'sprint_updated', data: updated });
-      return jsonResult({ sprint: updated, removed: wt });
+      return jsonResult({ sprint: updated, removed: wt, branchKept });
     },
   },
   {
     name: 'remove_worktree',
-    description: 'Remove a git worktree associated with a ticket. Deletes the working directory + prunes metadata + (by default) deletes the branch. Pass keepBranch:true to keep the branch. Clears ticket.worktree.',
+    description: 'Remove a git worktree associated with a ticket. Deletes the working directory + prunes metadata + (by default) deletes the branch. A branch holding unmerged commits is never deleted — the response reports it as `branchKept`. Pass keepBranch:true to always keep the branch. Clears ticket.worktree.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1130,14 +1138,18 @@ export const TOOLS: ToolDef[] = [
       if (!found) return errorResult(`Ticket "${ticketId}" not found`);
       const wt = found.ticket.worktree;
       if (!wt) return errorResult(`Ticket has no worktree.`);
+      let branchKept: string | null = null;
       try {
         await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: repoCwd });
       } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
+        if (!(err instanceof BranchKeptError)) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
+        branchKept = wt.branch;
       }
       const updated = await storage.updateTicket(ticketId, { worktree: null });
       if (updated) broadcast?.({ type: 'ticket_updated', data: updated });
-      return jsonResult({ ticket: updated, removed: wt });
+      return jsonResult({ ticket: updated, removed: wt, branchKept });
     },
   },
   {

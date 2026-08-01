@@ -17,7 +17,7 @@ import {
 import { createStorage, type TicketQueryOptions, type TicketSortBy } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
 import { SERVER_INSTRUCTIONS, TOOL_MAP, TOOLS, type ToolContext } from '../../mcp/tools.js';
-import { createSprintWorktree, createWorktree, getRepoRoot, isGitRepo, listWorktrees, removeWorktree } from '../../core/worktree.js';
+import { BranchKeptError, createSprintWorktree, createWorktree, getRepoRoot, isGitRepo, listWorktrees, removeWorktree } from '../../core/worktree.js';
 import { getBranchInsights, getRemoteInfo, detectDefaultBase } from '../../core/gitInsights.js';
 import { discoverGh, pushAndOpenPr, PrFlowError, type GhConfig } from '../../core/prFlow.js';
 import {
@@ -1181,10 +1181,18 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (!wt) return res.status(404).json({ error: 'Sprint has no worktree' });
       const force = req.query.force === 'true' || req.body?.force === true;
       const keepBranch = req.query.keepBranch === 'true' || req.body?.keepBranch === true;
-      await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
+      let branchKept: string | null = null;
+      try {
+        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
+      } catch (err) {
+        // Worktree removed, branch declined for unmerged commits — a success
+        // with a caveat, not a failure. Anything else is a real error.
+        if (!(err instanceof BranchKeptError)) throw err;
+        branchKept = wt.branch;
+      }
       const updated = await storage.updateSprint(id, { worktree: null });
       if (updated) broadcast(wss, { type: 'sprint_updated', data: updated });
-      res.json({ sprint: updated, removed: wt });
+      res.json({ sprint: updated, removed: wt, branchKept });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to remove sprint worktree' });
     }
@@ -1199,10 +1207,16 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (!wt) return res.status(404).json({ error: 'Ticket has no worktree' });
       const force = req.query.force === 'true' || req.body?.force === true;
       const keepBranch = req.query.keepBranch === 'true' || req.body?.keepBranch === true;
-      await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
+      let branchKept: string | null = null;
+      try {
+        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
+      } catch (err) {
+        if (!(err instanceof BranchKeptError)) throw err;
+        branchKept = wt.branch;
+      }
       const updated = await storage.updateTicket(id, { worktree: null });
       if (updated) broadcast(wss, { type: 'ticket_updated', data: updated });
-      res.json({ ticket: updated, removed: wt });
+      res.json({ ticket: updated, removed: wt, branchKept });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to remove worktree' });
     }

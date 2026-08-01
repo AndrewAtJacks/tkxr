@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { nanoid } from 'nanoid';
 import type { Ticket, Sprint, Epic, User, TicketType, TicketStatus, TicketComment } from './types.js';
-import { isGitRepo, removeWorktree } from './worktree.js';
+import { getRepoRoot, isBranchMerged, isGitRepo, removeWorktree } from './worktree.js';
 
 // --- queryTickets support -----------------------------------------------------
 // Kept in this file (rather than types.ts) because they describe the *storage*
@@ -784,18 +784,33 @@ export class ProjectStorage {
       if (updatedTicket) break;
     }
 
-    // Auto-close ticket worktree when moved to done (best effort, never blocks the status change).
+    // Auto-close ticket worktree when moved to done (best effort, never blocks
+    // the status change) — but ONLY once the branch has actually landed.
+    //
+    // `done` fires from every surface: `tkxr status`, MCP, the REST endpoint,
+    // and a board drag into the Done column. It used to remove the worktree
+    // unconditionally, which meant a reviewer marking a ticket done as the last
+    // step of review deleted the checkout the review had just run in — and, via
+    // `git branch -D`, could discard unmerged commits with it. Gating on
+    // "merged into trunk" keeps the cleanup for genuinely finished work while
+    // leaving in-flight branches alone. `isBranchMerged` answers false whenever
+    // it can't tell, so the safe path is the default.
     const done = updatedTicket as Ticket | null;
     if (done && done.status === 'done' && done.worktree && updates.worktree === undefined) {
       const wt = done.worktree;
       try {
         if (await isGitRepo()) {
-          await removeWorktree({ path: wt.path, branch: wt.branch, force: false, keepBranch: false });
-          // Success — clear the reference in a second write.
-          updatedTicket = await this._clearWorktreeField(id, done) || done;
+          const repoRoot = await getRepoRoot();
+          if (await isBranchMerged(wt.branch, repoRoot)) {
+            await removeWorktree({ path: wt.path, branch: wt.branch, force: false, keepBranch: false });
+            // Success — clear the reference in a second write.
+            updatedTicket = await this._clearWorktreeField(id, done) || done;
+          }
+          // Unmerged — keep the worktree. The human closes it out with
+          // `tkxr worktree remove <id>` once the branch is merged or abandoned.
         }
       } catch {
-        // Worktree dirty / already gone / branch has unpushed work — leave ticket.worktree as-is
+        // Worktree dirty / already gone / branch kept — leave ticket.worktree as-is
         // so the human sees "still has a worktree" and can decide.
       }
     }
