@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { derived } from 'svelte/store';
-  import type { Epic, PagedTicketQuery, PagedTicketStore, Sprint, Ticket, TicketStatus, User } from './stores';
+  import type { Epic, PagedTicketQuery, PagedTicketStore, Ticket, TicketStatus, User } from './stores';
   import { createPagedTicketStore } from './stores';
   import { STATUS_COLOR, STATUS_LABEL, STATUS_ORDER, statusTint } from './util';
   import { draggingTicketId } from './drag';
@@ -13,7 +13,8 @@
   // paged fetch can't fill the Kanban evenly — page 1 might be all `progress`
   // and leave `backlog` empty. Each column keeps its own `nextCursor` so
   // "Load more" only extends that column.
-  export let sprints: Sprint[] = [];
+  // No `sprints` prop: BoardCard dropped its sprint-name fallback chip, which
+  // was this component's only consumer (tas-nuu2zscR).
   export let epics: Epic[] = [];
   export let users: User[] = [];
   export let commentCounts: Record<string, number> = {};
@@ -28,7 +29,6 @@
 
   const dispatch = createEventDispatcher();
 
-  $: sprintById = new Map(sprints.map(s => [s.id, s]));
   $: epicById = new Map(epics.map(e => [e.id, e]));
   $: userById = new Map(users.map((u, i) => [u.id, { user: u, index: i }]));
 
@@ -242,12 +242,10 @@
 
       <div class="cards">
         {#each list as t (t.id)}
-          {@const sprint = t.sprint ? sprintById.get(t.sprint) : undefined}
           {@const epic = t.epic ? epicById.get(t.epic) : undefined}
           {@const asg = t.assignee ? userById.get(t.assignee) : undefined}
           <BoardCard
             ticket={t}
-            {sprint}
             {epic}
             assignee={asg?.user}
             assigneeIndex={asg?.index ?? 0}

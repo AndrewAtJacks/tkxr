@@ -1,9 +1,15 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
-  import type { Epic, Sprint, Ticket } from './stores';
+  import type { Epic, Sprint, Ticket, User } from './stores';
   import { normalizeTicket } from './util';
   import { onTicketEvent } from './ticketEvents';
+  import { claudeAvailable } from './settings';
+  import { runPrompt } from './claudeRun';
+  import { epicBreakdownPrompt } from './prompts';
+  import { copyToClipboard, showToast } from './clipboard';
+  import BranchInsights from './BranchInsights.svelte';
   import CopyId from './CopyId.svelte';
+  import Sparkles from './icons/Sparkles.svelte';
   import X from './icons/X.svelte';
 
   export let epic: Epic | null = null;
@@ -12,6 +18,8 @@
   export let sprintId: string | null = null;
   /** All sprints — backs the "move this epic to another workspace" selector. */
   export let sprints: Sprint[] = [];
+  /** Reference data for the planning prompt — never auto-assigned from. */
+  export let users: User[] = [];
 
   const dispatch = createEventDispatcher();
 
@@ -114,9 +122,99 @@
     } catch { /* noop */ }
   }
 
+  // ---- Worktree (tas-IK2HcQWo) ----
+  // An epic is the unit that maps to a feature branch. Ticket worktrees created
+  // after this one branch off it, so it's the natural integration point.
+  let worktreeBusy = false;
+
+  async function createEpicWorktree() {
+    if (!epic || worktreeBusy) return;
+    worktreeBusy = true;
+    try {
+      const res = await fetch(`/api/epics/${epic.id}/worktree`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (j.epic) epic = j.epic;
+        showToast('Epic worktree created', 'success');
+        dispatch('reload');
+      } else {
+        showToast(j.error || 'Failed to create epic worktree', 'error', 4000);
+      }
+    } catch {
+      showToast('Failed to create epic worktree', 'error');
+    } finally {
+      worktreeBusy = false;
+    }
+  }
+
+  async function removeEpicWorktree(force = false) {
+    if (!epic || worktreeBusy) return;
+    if (!force && !confirm('Remove the epic worktree? The epic branch is deleted too, unless it holds unmerged commits.')) return;
+    worktreeBusy = true;
+    try {
+      const res = await fetch(`/api/epics/${epic.id}/worktree${force ? '?force=true' : ''}`, {
+        method: 'DELETE',
+      });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (j.epic) epic = j.epic;
+        showToast(
+          j.branchKept ? `Worktree removed — branch ${j.branchKept} kept (unmerged)` : 'Epic worktree removed',
+          'success',
+          j.branchKept ? 5000 : 2500,
+        );
+        dispatch('reload');
+      } else {
+        const msg = j.error || 'Failed to remove epic worktree';
+        if (!force && /uncommitted|locked|dirty/i.test(msg)) {
+          if (confirm(`${msg}\n\nForce remove?`)) {
+            worktreeBusy = false;
+            return removeEpicWorktree(true);
+          }
+        }
+        showToast(msg, 'error', 4000);
+      }
+    } catch {
+      showToast('Failed to remove epic worktree', 'error');
+    } finally {
+      worktreeBusy = false;
+    }
+  }
+
+  async function copyCd() {
+    if (!epic?.worktree) return;
+    const ok = await copyToClipboard(`cd "${epic.worktree.path}"`);
+    showToast(ok ? 'Copied cd command' : 'Copy failed', ok ? 'success' : 'error');
+  }
+
+  // ---- Plan with Claude (tas-HnASryio) ----
+  // Mirrors SprintPanel's plan action. Gated on a goal only — unlike a sprint
+  // there's no "planning" status requirement, because an active epic picking up
+  // more scope is normal.
+  $: canPlan = !!epic && !isCreate && !!epic.goal && epic.goal.trim().length > 0;
+
+  function runPlan() {
+    if (!epic || !canPlan) return;
+    runPrompt(epicBreakdownPrompt(epic, scoped, users), {
+      cwd: epic.worktree?.path,
+      label: 'Plan ' + epic.name,
+    });
+  }
+
   async function deleteEpic() {
     if (!epic) return;
-    if (!confirm('Delete this epic? Its tickets stay but lose the epic tag.')) return;
+    // Deleting never touches the worktree — same rule as sprint completion
+    // (bug-MtPFb7dg). But the epic record is the only thing that remembers the
+    // path, so warn before it goes: afterwards it's a manual `git worktree
+    // remove`.
+    const wtWarning = epic.worktree
+      ? `\n\nIts worktree at ${epic.worktree.path} (branch ${epic.worktree.branch}) is left in place, and tkxr will no longer track it. Remove the worktree first if you want tkxr to clean it up.`
+      : '';
+    if (!confirm(`Delete this epic? Its tickets stay but lose the epic tag.${wtWarning}`)) return;
     try {
       const res = await fetch(`/api/epics/${epic.id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -217,6 +315,50 @@
         <div class="empty">No tickets in this epic yet.</div>
       {/if}
     </div>
+
+    <div class="wt-card">
+      <div class="wt-head">
+        <span class="wt-label">Epic worktree</span>
+        {#if epic.worktree}
+          <span class="wt-badge">active</span>
+        {/if}
+      </div>
+      {#if epic.worktree}
+        <div class="wt-rows">
+          <div class="wt-row"><span class="wt-k">Path</span><span class="wt-v mono">{epic.worktree.path}</span></div>
+          <div class="wt-row"><span class="wt-k">Branch</span><span class="wt-v mono">{epic.worktree.branch}</span></div>
+        </div>
+        <div class="wt-actions">
+          <button class="btn" on:click={copyCd} disabled={worktreeBusy}>Copy cd</button>
+          <button class="btn btn-danger" on:click={() => removeEpicWorktree(false)} disabled={worktreeBusy}>Remove worktree</button>
+        </div>
+      {:else}
+        <div class="wt-hint">A dedicated feature branch + checkout for this epic. Ticket worktrees created after this branch off it, and the epic branch is what opens a PR. Default: <code>tkxr/epic/{epic.id}</code>.</div>
+        <button class="btn btn-primary" on:click={createEpicWorktree} disabled={worktreeBusy}>Create epic worktree</button>
+      {/if}
+    </div>
+
+    {#if epic.worktree}
+      <BranchInsights scope="epic" id={epic.id} worktreePath={epic.worktree.path} />
+    {/if}
+
+    <div class="orch-card">
+      <div class="orch-head">
+        <Sparkles size={14} color="var(--ai)" />
+        <span>Plan epic with Claude</span>
+      </div>
+      <div class="orch-hint">
+        {#if canPlan}
+          Sends a prompt that asks Claude to research the epic goal, then create child tickets (with waves via <code>dependsOn</code>). Guardrails: won't touch existing tickets, won't flip statuses, capped at ~12 new tickets.
+        {:else}
+          Set a <strong>goal</strong> above to enable planning.
+        {/if}
+      </div>
+      <button class="orch-btn" on:click={runPlan} disabled={!canPlan}>
+        <Sparkles size={14} color="#fff" />
+        <span>{$claudeAvailable ? 'Plan with Claude' : 'Copy plan prompt'}</span>
+      </button>
+    </div>
   {/if}
 </div>
 
@@ -285,6 +427,75 @@
   .t-title { flex: 1; font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .t-status { font-size: 10px; text-transform: uppercase; font-weight: 600; color: var(--muted); }
   .empty { font-size: 12px; color: var(--faint); padding: 8px; }
+  /* Worktree + Claude cards — same visual language as SprintPanel's. */
+  .wt-card, .orch-card {
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .wt-head, .orch-head { display: flex; align-items: center; gap: 8px; }
+  .orch-head { font-size: 12.5px; font-weight: 600; color: var(--text2); }
+  .wt-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .wt-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: rgba(70,193,127,.14);
+    color: #46c17f;
+  }
+  .wt-rows { display: flex; flex-direction: column; gap: 4px; }
+  .wt-row { display: flex; gap: 8px; align-items: baseline; }
+  .wt-k {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--faint);
+    width: 46px;
+    flex: none;
+  }
+  .wt-v {
+    flex: 1;
+    font-size: 11.5px;
+    color: var(--text2);
+    word-break: break-all;
+  }
+  .wt-hint, .orch-hint { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+  .wt-hint code, .orch-hint code {
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-size: 10.5px;
+  }
+  .wt-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .orch-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 9px 12px;
+    background: linear-gradient(135deg, #4c8dff, #6b5bff);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .12s;
+  }
+  .orch-btn:hover:not(:disabled) { opacity: .9; }
+  .orch-btn:disabled { opacity: .45; cursor: not-allowed; }
   .foot {
     padding: 12px 18px; border-top: 1px solid var(--border-subtle);
     display: flex; align-items: center; gap: 10px; justify-content: space-between;

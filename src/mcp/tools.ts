@@ -1,6 +1,7 @@
 import type { ProjectStorage } from '../core/storage.js';
 import type { Epic, Sprint, Ticket, TicketStatus, User } from '../core/types.js';
-import { BranchKeptError, createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree } from '../core/worktree.js';
+import { badColorRef } from '../core/color.js';
+import { BranchKeptError, createEpicWorktree, createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree, resolveTicketBase } from '../core/worktree.js';
 
 export type BroadcastEvent =
   | { type: 'ticket_created' | 'ticket_updated' | 'ticket_deleted' | 'sprint_created' | 'sprint_updated' | 'sprint_deleted' | 'epic_created' | 'epic_updated' | 'epic_deleted' | 'user_created' | 'user_updated' | 'user_deleted' | 'comment_created' | 'comment_deleted'; data: any };
@@ -174,11 +175,31 @@ different tickets simultaneously without stepping on each other's branch state.
   default also deletes the branch (pass \`keepBranch: true\` to keep it around),
   but a branch with unmerged commits is always kept and reported as
   \`branchKept\` — removal never discards unlanded work.
+- \`create_epic_worktree\` / \`remove_epic_worktree\` — same, for an epic. Default path
+  \`../<repo>-worktrees/epics/<epic-id>\`, default branch \`tkxr/epic/<epic-id>\`.
+- \`create_sprint_worktree\` / \`remove_sprint_worktree\` — same, for a sprint. Default path
+  \`../<repo>-worktrees/sprints/<sprint-id>\`, default branch \`tkxr/sprint/<sprint-id>\`.
 - \`list_worktrees\` — mirrors \`git worktree list\`.
 
-Status changes never remove a worktree. Setting a ticket to \`done\` (or a sprint
-to \`completed\`) leaves the directory and branch untouched — call
-\`remove_worktree\` explicitly when you actually want it gone.
+**Branch hierarchy.** An epic is the unit that maps to a feature branch, so a new
+ticket branch is based on its **epic** branch when that epic has a worktree,
+falling back to its **sprint** branch, then \`HEAD\`. A sprint frames the whole
+workspace, so the sprint branch is only the right base for tickets with no epic
+worktree — and for the orchestrator flow, which merges ticket branches into it.
+PRs follow the same order: ticket → epic branch, epic → sprint branch or repo
+default, sprint → repo default.
+
+You never have to work the order out yourself: all three \`create_*_worktree\`
+tools resolve the base and report it back as \`basedOn\`, so read that off the
+response rather than passing \`base\` by hand. The base is fixed at creation time
+and not rewritten afterwards — a ticket worktree made before its epic had one
+stays on whatever it forked from.
+
+Status changes never remove a worktree. Setting a ticket to \`done\` (or an epic or
+sprint to \`completed\`) leaves the directory and branch untouched — call the
+matching \`remove_*_worktree\` explicitly when you actually want it gone. Deleting
+an epic or sprint doesn't remove its worktree either, and afterwards nothing
+records the path, so remove the worktree first.
 
 If you're about to work on a ticket and \`ticket.worktree\` is null, consider
 creating one first — then \`cd\` into it and do the work there. Commits inside a
@@ -765,20 +786,28 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'delete_sprint',
-    description: 'Delete a sprint by id. Any tickets attached to the sprint have their sprint field cleared and each is re-broadcast as ticket_updated so open web clients refresh.',
+    description: 'Delete a sprint by id. Any tickets attached to the sprint have their sprint field cleared, and any epics under it become sprintless; each is re-broadcast (ticket_updated / epic_updated) so open web clients refresh.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
       required: ['id'],
     },
     handler: async ({ id }, { storage, broadcast }) => {
-      const { ok, sweptTickets } = await storage.deleteSprint(id);
+      const { ok, sweptTickets, sweptEpics } = await storage.deleteSprint(id);
       if (!ok) return errorResult(`Sprint "${id}" not found`);
       broadcast?.({ type: 'sprint_deleted', data: { id } });
+      for (const e of sweptEpics) {
+        broadcast?.({ type: 'epic_updated', data: e });
+      }
       for (const t of sweptTickets) {
         broadcast?.({ type: 'ticket_updated', data: t });
       }
-      return jsonResult({ id, deleted: true, sweptTicketIds: sweptTickets.map(t => t.id) });
+      return jsonResult({
+        id,
+        deleted: true,
+        sweptTicketIds: sweptTickets.map(t => t.id),
+        sweptEpicIds: sweptEpics.map(e => e.id),
+      });
     },
   },
 
@@ -846,7 +875,11 @@ export const TOOLS: ToolDef[] = [
       const opts: Partial<Epic> = {};
       if (args.description) opts.description = args.description;
       if (args.goal) opts.goal = args.goal;
-      if (args.color) opts.color = args.color;
+      if (args.color) {
+        const bad = badColorRef(args.color);
+        if (bad) return errorResult(bad);
+        opts.color = args.color;
+      }
       if (args.status) opts.status = args.status;
       if (args.sprint) {
         const bad = await badSprintRef(storage, args.sprint);
@@ -882,7 +915,11 @@ export const TOOLS: ToolDef[] = [
       if (args.name !== undefined) patch.name = args.name;
       if (args.description !== undefined) patch.description = args.description;
       if (args.goal !== undefined) patch.goal = args.goal;
-      if (args.color !== undefined) patch.color = args.color;
+      if (args.color !== undefined) {
+        const bad = badColorRef(args.color);
+        if (bad) return errorResult(bad);
+        patch.color = args.color;
+      }
       if (args.status !== undefined) patch.status = args.status;
       if (args.sprint !== undefined) {
         const bad = await badSprintRef(storage, args.sprint);
@@ -1020,14 +1057,14 @@ export const TOOLS: ToolDef[] = [
   // -------------- Worktree tools --------------
   {
     name: 'create_worktree',
-    description: 'Create a git worktree + branch for a ticket so agents can work on it in isolation. Default path: ../<repo>-worktrees/<ticket-id>. Default branch: tkxr/<ticket-id>. If the ticket belongs to a sprint that has its own worktree, the new branch is automatically based off the sprint branch (pass explicit `base` to override). Sets ticket.worktree and broadcasts ticket_updated.',
+    description: 'Create a git worktree + branch for a ticket so agents can work on it in isolation. Default path: ../<repo>-worktrees/<ticket-id>. Default branch: tkxr/<ticket-id>. The new branch is based off the ticket\'s epic branch when its epic has a worktree, else its sprint branch when the sprint has one, else HEAD (pass explicit `base` to override). Sets ticket.worktree and broadcasts ticket_updated.',
     inputSchema: {
       type: 'object',
       properties: {
         ticketId: { type: 'string' },
         path: { type: 'string', description: 'Override the default worktree path' },
         branch: { type: 'string', description: 'Override the default branch name' },
-        base: { type: 'string', description: 'Base branch/ref for the new branch (default HEAD, or sprint branch if ticket is in a sprint with a worktree)' },
+        base: { type: 'string', description: 'Base branch/ref for the new branch (default: epic branch, else sprint branch, else HEAD)' },
       },
       required: ['ticketId'],
     },
@@ -1040,10 +1077,14 @@ export const TOOLS: ToolDef[] = [
       if (!(await isGitRepo(repoCwd))) return errorResult('Not a git repository. Run this from inside a git repo.');
 
       let effectiveBase = base;
-      if (!effectiveBase && found.ticket.sprint) {
-        const sprints = await storage.getSprints();
-        const sprint = sprints.find(s => s.id === found.ticket.sprint);
-        if (sprint?.worktree) effectiveBase = sprint.worktree.branch;
+      if (!effectiveBase) {
+        const epic = found.ticket.epic
+          ? (await storage.getEpics()).find(e => e.id === found.ticket.epic)
+          : null;
+        const sprint = found.ticket.sprint
+          ? (await storage.getSprints()).find(s => s.id === found.ticket.sprint)
+          : null;
+        effectiveBase = resolveTicketBase(epic, sprint) || undefined;
       }
 
       try {
@@ -1059,8 +1100,78 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'create_epic_worktree',
+    description: 'Create a git worktree + feature branch for an epic. Default path: ../<repo>-worktrees/epics/<epic-id>. Default branch: tkxr/epic/<epic-id>. An epic is the unit that maps to a feature branch, so ticket worktrees created afterwards automatically base off this branch. Bases off the epic\'s sprint branch when its workspace has one, else HEAD. Sets epic.worktree and broadcasts epic_updated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        epicId: { type: 'string' },
+        path: { type: 'string', description: 'Override the default epic worktree path' },
+        branch: { type: 'string', description: 'Override the default epic branch name' },
+        base: { type: 'string', description: 'Base branch/ref for the new epic branch (default: the sprint branch if the epic\'s sprint has a worktree, else HEAD)' },
+      },
+      required: ['epicId'],
+    },
+    handler: async ({ epicId, path: p, branch, base }, { storage, broadcast, repoCwd }) => {
+      const epics = await storage.getEpics();
+      const epic = epics.find(e => e.id === epicId);
+      if (!epic) return errorResult(`Epic "${epicId}" not found`);
+      if (epic.worktree) {
+        return errorResult(`Epic already has a worktree at ${epic.worktree.path}. Remove it first if you want a different one.`);
+      }
+      if (!(await isGitRepo(repoCwd))) return errorResult('Not a git repository.');
+      let effectiveBase = base;
+      if (!effectiveBase && epic.sprint) {
+        const sprint = (await storage.getSprints()).find(s => s.id === epic.sprint);
+        if (sprint?.worktree) effectiveBase = sprint.worktree.branch;
+      }
+      try {
+        const result = await createEpicWorktree({ epicId, path: p, branch, base: effectiveBase, cwd: repoCwd });
+        const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
+        const updated = await storage.updateEpic(epicId, { worktree: wt });
+        if (!updated) return errorResult(`Epic "${epicId}" disappeared during update`);
+        broadcast?.({ type: 'epic_updated', data: updated });
+        return jsonResult({ epic: updated, worktree: wt, basedOn: effectiveBase || 'HEAD' });
+      } catch (err) {
+        return errorResult(err instanceof Error ? err.message : String(err));
+      }
+    },
+  },
+  {
+    name: 'remove_epic_worktree',
+    description: 'Remove an epic\'s worktree. Deletes the working directory + prunes metadata + (by default) deletes the epic feature branch. A branch holding unmerged commits is never deleted — the response reports it as `branchKept`. Pass keepBranch:true to always keep it. Clears epic.worktree.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        epicId: { type: 'string' },
+        force: { type: 'boolean', description: 'Force removal even if the worktree has uncommitted changes' },
+        keepBranch: { type: 'boolean', description: 'Do not delete the epic branch after removing the worktree (default: false)' },
+      },
+      required: ['epicId'],
+    },
+    handler: async ({ epicId, force, keepBranch }, { storage, broadcast, repoCwd }) => {
+      const epics = await storage.getEpics();
+      const epic = epics.find(e => e.id === epicId);
+      if (!epic) return errorResult(`Epic "${epicId}" not found`);
+      const wt = epic.worktree;
+      if (!wt) return errorResult(`Epic has no worktree.`);
+      let branchKept: string | null = null;
+      try {
+        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: repoCwd });
+      } catch (err) {
+        if (!(err instanceof BranchKeptError)) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
+        branchKept = wt.branch;
+      }
+      const updated = await storage.updateEpic(epicId, { worktree: null });
+      if (updated) broadcast?.({ type: 'epic_updated', data: updated });
+      return jsonResult({ epic: updated, removed: wt, branchKept });
+    },
+  },
+  {
     name: 'create_sprint_worktree',
-    description: 'Create a git worktree + feature branch for a sprint. Default path: ../<repo>-worktrees/sprints/<sprint-id>. Default branch: tkxr/sprint/<sprint-id>. Held by the orchestrator agent — sub-agents work in per-ticket worktrees and the orchestrator merges their branches into this one. Sets sprint.worktree and broadcasts sprint_updated.',
+    description: 'Create a git worktree + integration branch for a sprint (workspace). Default path: ../<repo>-worktrees/sprints/<sprint-id>. Default branch: tkxr/sprint/<sprint-id>. Held by the orchestrator agent — sub-agents work in per-ticket worktrees and the orchestrator merges their branches into this one. This is the base for tickets with no epic worktree, and for epic worktrees created afterwards; tickets inside an epic that has one base off the epic branch instead. Sets sprint.worktree and broadcasts sprint_updated.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1085,7 +1196,11 @@ export const TOOLS: ToolDef[] = [
         const updated = await storage.updateSprint(sprintId, { worktree: wt });
         if (!updated) return errorResult(`Sprint "${sprintId}" disappeared during update`);
         broadcast?.({ type: 'sprint_updated', data: updated });
-        return jsonResult({ sprint: updated, worktree: wt });
+        // `basedOn` mirrors create_worktree / create_epic_worktree. A sprint has
+        // no parent to resolve one from, so it is whatever was passed or HEAD —
+        // but callers shouldn't have to special-case which of the three they
+        // called to find out what the branch forked from.
+        return jsonResult({ sprint: updated, worktree: wt, basedOn: base || 'HEAD' });
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : String(err));
       }
@@ -1093,7 +1208,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'remove_sprint_worktree',
-    description: 'Remove a sprint\'s worktree. Deletes the working directory + prunes metadata + (by default) deletes the sprint feature branch. Pass keepBranch:true to keep the branch (e.g. after merging up to main). Clears sprint.worktree.',
+    description: 'Remove a sprint\'s worktree. Deletes the working directory + prunes metadata + (by default) deletes the sprint feature branch. A branch holding unmerged commits is never deleted — the response reports it as `branchKept`. Pass keepBranch:true to always keep it (e.g. after merging up to main). Clears sprint.worktree.',
     inputSchema: {
       type: 'object',
       properties: {

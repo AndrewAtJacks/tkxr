@@ -25,8 +25,11 @@ probe).
 - **Transport**: reuse the existing `WebSocketServer` in `serve.ts`. New
   event types `claude_run_started` / `claude_run_chunk` / `claude_run_exit`
   keyed by `runId`. No SSE — one live socket already fans out to all tabs.
-- **CWD contract**: `ticket.worktree.path` → `sprint.worktree.path` → repo
-  root, validated against `list_worktrees()` + `getRepoRoot()` before spawn.
+- **CWD contract**: `ticket.worktree.path` → `epic.worktree.path` →
+  `sprint.worktree.path` → repo root, validated against `list_worktrees()` +
+  `getRepoRoot()` before spawn. Epic worktrees postdate this doc
+  (tas-IK2HcQWo); they need no special handling because `list_worktrees()`
+  enumerates every git worktree regardless of which entity owns it.
 - **Binary discovery**: probe once at server start with `which`/`where`,
   cache result on `app.locals`. Env override: `TKXR_CLAUDE_BIN`.
 - **Session lifecycle**: one process per prompt. Cancel = `SIGTERM` then
@@ -360,10 +363,10 @@ async function resolveCwd(requested: string | undefined, ticketId?: string): Pro
 }
 ```
 
-The web store already surfaces `ticket.worktree?.path` and
-`sprint.worktree?.path`; those are passed as the `cwd` and validated here.
-No worktree = repo root. This satisfies the ticket's "workspace escape
-via cwd" concern.
+The web store already surfaces `ticket.worktree?.path`,
+`epic.worktree?.path` and `sprint.worktree?.path`; those are passed as the
+`cwd` and validated here. No worktree = repo root. This satisfies the
+ticket's "workspace escape via cwd" concern.
 
 ---
 

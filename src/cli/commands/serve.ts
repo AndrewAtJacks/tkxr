@@ -16,8 +16,9 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { createStorage, type TicketQueryOptions, type TicketSortBy } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
+import { COLOR_ERROR, isValidColor } from '../../core/color.js';
 import { SERVER_INSTRUCTIONS, TOOL_MAP, TOOLS, type ToolContext } from '../../mcp/tools.js';
-import { BranchKeptError, createSprintWorktree, createWorktree, getRepoRoot, isGitRepo, listWorktrees, removeWorktree } from '../../core/worktree.js';
+import { BranchKeptError, createEpicWorktree, createSprintWorktree, createWorktree, getRepoRoot, isGitRepo, listWorktrees, removeWorktree, resolveTicketBase } from '../../core/worktree.js';
 import { getBranchInsights, getRemoteInfo, detectDefaultBase } from '../../core/gitInsights.js';
 import { discoverGh, pushAndOpenPr, PrFlowError, type GhConfig } from '../../core/prFlow.js';
 import {
@@ -306,6 +307,13 @@ export async function startServer(args: ServeArgs): Promise<void> {
       // sentinel the ticket query filters already use.
       const byEpic: Record<string, number> = { none: 0 };
       const byAssignee: Record<string, number> = { none: 0 };
+      // Story-point rollups. Server-side because every client-side alternative
+      // reads a paged slice and under-counts: the epic panels each fetch their
+      // own capped slice, and the sidebar only ever holds page 1. Computed over
+      // the same scoped `tickets` as the counts beside them (tas-HnASryio).
+      const pointsByEpic: Record<string, { total: number; done: number }> = { none: { total: 0, done: 0 } };
+      let pointsTotal = 0;
+      let pointsDone = 0;
 
       for (const t of tickets) {
         // Defensive: unknown statuses just don't get counted in byStatus.
@@ -319,6 +327,13 @@ export async function startServer(args: ServeArgs): Promise<void> {
         byEpic[epicKey] = (byEpic[epicKey] || 0) + 1;
         const asgKey = t.assignee || 'none';
         byAssignee[asgKey] = (byAssignee[asgKey] || 0) + 1;
+
+        const pts = t.estimate || 0;
+        pointsTotal += pts;
+        if (!isOpen) pointsDone += pts;
+        if (!pointsByEpic[epicKey]) pointsByEpic[epicKey] = { total: 0, done: 0 };
+        pointsByEpic[epicKey].total += pts;
+        if (!isOpen) pointsByEpic[epicKey].done += pts;
       }
 
       // Project-wide sprint buckets for the workspace picker — deliberately
@@ -337,7 +352,9 @@ export async function startServer(args: ServeArgs): Promise<void> {
         backlogCount: byStatus.backlog,
       };
 
-      res.json({ counts, triage, byStatus, byEpic, byAssignee, bySprint });
+      const points = { total: pointsTotal, done: pointsDone };
+
+      res.json({ counts, triage, byStatus, byEpic, byAssignee, bySprint, points, pointsByEpic });
     } catch (error) {
       res.status(500).json({ error: 'Failed to load ticket summary' });
     }
@@ -411,7 +428,12 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const opts: any = {};
       if (rest.description) opts.description = rest.description;
       if (rest.goal) opts.goal = rest.goal;
-      if (rest.color) opts.color = rest.color;
+      if (rest.color) {
+        if (!isValidColor(rest.color)) {
+          return res.status(400).json({ error: { code: 'bad_input', message: COLOR_ERROR } });
+        }
+        opts.color = rest.color;
+      }
       if (rest.status) {
         if (!VALID_EPIC_STATUSES.has(rest.status)) {
           return res.status(400).json({
@@ -441,7 +463,12 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (name !== undefined) updates.name = name;
       if (description !== undefined) updates.description = description;
       if (goal !== undefined) updates.goal = goal;
-      if (color !== undefined) updates.color = color;
+      if (color !== undefined) {
+        if (!isValidColor(color)) {
+          return res.status(400).json({ error: { code: 'bad_input', message: COLOR_ERROR } });
+        }
+        updates.color = color;
+      }
       if (sprint !== undefined) updates.sprint = sprint || undefined;
       if (status !== undefined) {
         if (!VALID_EPIC_STATUSES.has(status)) {
@@ -736,18 +763,27 @@ export async function startServer(args: ServeArgs): Promise<void> {
   app.delete('/api/sprints/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const { ok, sweptTickets } = await storage.deleteSprint(id);
+      const { ok, sweptTickets, sweptEpics } = await storage.deleteSprint(id);
 
       if (!ok) {
         return res.status(404).json({ error: 'Sprint not found' });
       }
 
       broadcast(wss, { type: 'sprint_deleted', data: { id } });
+      // Epics under the sprint are detached rather than deleted — re-broadcast
+      // them so clients stop filing them under the workspace that just went away.
+      for (const e of sweptEpics) {
+        broadcast(wss, { type: 'epic_updated', data: e });
+      }
       for (const t of sweptTickets) {
         broadcast(wss, { type: 'ticket_updated', data: t });
       }
 
-      res.json({ success: true, sweptTicketIds: sweptTickets.map(t => t.id) });
+      res.json({
+        success: true,
+        sweptTicketIds: sweptTickets.map(t => t.id),
+        sweptEpicIds: sweptEpics.map(e => e.id),
+      });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete sprint' });
     }
@@ -934,6 +970,22 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
+  app.post('/api/cli-notifications/sprint-deleted', async (req, res) => {
+    try {
+      const { id } = req.body;
+
+      // Broadcast to WebSocket clients
+      broadcast(wss, {
+        type: 'sprint_deleted',
+        data: { id }
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to process notification' });
+    }
+  });
+
   app.post('/api/cli-notifications/epic-created', async (req, res) => {
     try {
       const epic = req.body;
@@ -992,6 +1044,38 @@ export async function startServer(args: ServeArgs): Promise<void> {
         data: user 
       });
       
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to process notification' });
+    }
+  });
+
+  app.post('/api/cli-notifications/user-updated', async (req, res) => {
+    try {
+      const user = req.body;
+
+      // Broadcast to WebSocket clients
+      broadcast(wss, {
+        type: 'user_updated',
+        data: user
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to process notification' });
+    }
+  });
+
+  app.post('/api/cli-notifications/user-deleted', async (req, res) => {
+    try {
+      const { id } = req.body;
+
+      // Broadcast to WebSocket clients
+      broadcast(wss, {
+        type: 'user_deleted',
+        data: { id }
+      });
+
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to process notification' });
@@ -1138,9 +1222,14 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (!(await isGitRepo(originalCwd))) return res.status(400).json({ error: 'Not a git repository' });
       const { path: p, branch, base } = req.body || {};
       let effectiveBase = base;
-      if (!effectiveBase && found.ticket.sprint) {
-        const sprint = (await storage.getSprints()).find(s => s.id === found.ticket.sprint);
-        if (sprint?.worktree) effectiveBase = sprint.worktree.branch;
+      if (!effectiveBase) {
+        const epic = found.ticket.epic
+          ? (await storage.getEpics()).find(e => e.id === found.ticket.epic)
+          : null;
+        const sprint = found.ticket.sprint
+          ? (await storage.getSprints()).find(s => s.id === found.ticket.sprint)
+          : null;
+        effectiveBase = resolveTicketBase(epic, sprint) || undefined;
       }
       const result = await createWorktree({ ticketId: id, path: p, branch, base: effectiveBase, cwd: originalCwd });
       const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
@@ -1149,6 +1238,58 @@ export async function startServer(args: ServeArgs): Promise<void> {
       res.json({ ticket: updated, worktree: wt, basedOn: effectiveBase || 'HEAD' });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create worktree' });
+    }
+  });
+
+  app.post('/api/epics/:id/worktree', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const epic = (await storage.getEpics()).find(e => e.id === id);
+      if (!epic) return res.status(404).json({ error: 'Epic not found' });
+      if (epic.worktree) {
+        return res.status(409).json({ error: `Epic already has a worktree at ${epic.worktree.path}` });
+      }
+      if (!(await isGitRepo(originalCwd))) return res.status(400).json({ error: 'Not a git repository' });
+      const { path: p, branch, base } = req.body || {};
+      // An epic nests under its workspace the way a ticket nests under its epic.
+      let effectiveBase = base;
+      if (!effectiveBase && epic.sprint) {
+        const sprint = (await storage.getSprints()).find(s => s.id === epic.sprint);
+        if (sprint?.worktree) effectiveBase = sprint.worktree.branch;
+      }
+      const result = await createEpicWorktree({ epicId: id, path: p, branch, base: effectiveBase, cwd: originalCwd });
+      const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
+      const updated = await storage.updateEpic(id, { worktree: wt });
+      if (updated) broadcast(wss, { type: 'epic_updated', data: updated });
+      res.json({ epic: updated, worktree: wt, basedOn: effectiveBase || 'HEAD' });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create epic worktree' });
+    }
+  });
+
+  app.delete('/api/epics/:id/worktree', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const epic = (await storage.getEpics()).find(e => e.id === id);
+      if (!epic) return res.status(404).json({ error: 'Epic not found' });
+      const wt = epic.worktree;
+      if (!wt) return res.status(404).json({ error: 'Epic has no worktree' });
+      const force = req.query.force === 'true' || req.body?.force === true;
+      const keepBranch = req.query.keepBranch === 'true' || req.body?.keepBranch === true;
+      let branchKept: string | null = null;
+      try {
+        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
+      } catch (err) {
+        // Worktree removed, branch declined for unmerged commits — a success
+        // with a caveat, not a failure. Anything else is a real error.
+        if (!(err instanceof BranchKeptError)) throw err;
+        branchKept = wt.branch;
+      }
+      const updated = await storage.updateEpic(id, { worktree: null });
+      if (updated) broadcast(wss, { type: 'epic_updated', data: updated });
+      res.json({ epic: updated, removed: wt, branchKept });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to remove epic worktree' });
     }
   });
 
@@ -1166,7 +1307,9 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
       const updated = await storage.updateSprint(id, { worktree: wt });
       if (updated) broadcast(wss, { type: 'sprint_updated', data: updated });
-      res.json({ sprint: updated, worktree: wt });
+      // `basedOn` mirrors the ticket and epic routes — a sprint has no parent to
+      // resolve a base from, but the response shape shouldn't differ by entity.
+      res.json({ sprint: updated, worktree: wt, basedOn: base || 'HEAD' });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create sprint worktree' });
     }
@@ -1244,13 +1387,20 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const wt = found.ticket.worktree;
       if (!wt) return res.status(409).json({ error: 'Ticket has no worktree' });
 
-      // Prefer the sprint branch as base when the ticket is in a sprint that
-      // has its own worktree. Otherwise fall back to the repo default (main).
-      let base: string | undefined;
-      if (found.ticket.sprint) {
-        const sprint = (await storage.getSprints()).find(s => s.id === found.ticket.sprint);
-        if (sprint?.worktree) base = sprint.worktree.branch;
-      }
+      // Prefer the epic branch as base, then the sprint branch, then the repo
+      // default (main) — the same order ticket worktrees are created against,
+      // so insights and the PR base agree on what this branch belongs under.
+      // Resolved live rather than recorded at creation: if the epic worktree
+      // came after the ticket's, this is the current convention rather than the
+      // literal fork point, which is what you want to see a branch measured
+      // against anyway.
+      const insightsEpic = found.ticket.epic
+        ? (await storage.getEpics()).find(e => e.id === found.ticket.epic)
+        : null;
+      const insightsSprint = found.ticket.sprint
+        ? (await storage.getSprints()).find(s => s.id === found.ticket.sprint)
+        : null;
+      const base = resolveTicketBase(insightsEpic, insightsSprint) || undefined;
 
       const remote = await getRemoteInfo(originalCwd);
       const insights = await getBranchInsights({
@@ -1273,6 +1423,9 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const wt = sprint.worktree;
       if (!wt) return res.status(409).json({ error: 'Sprint has no worktree' });
 
+      // No `base` passed: a sprint sits at the top of the hierarchy, so
+      // `getBranchInsights` resolving the repo default is the right comparison.
+      // The ticket and epic routes resolve a parent branch instead.
       const remote = await getRemoteInfo(originalCwd);
       const insights = await getBranchInsights({
         cwd: wt.path,
@@ -1285,10 +1438,41 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
+  app.get('/api/epics/:id/git', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const epic = (await storage.getEpics()).find(e => e.id === id);
+      if (!epic) return res.status(404).json({ error: 'Epic not found' });
+      const wt = epic.worktree;
+      if (!wt) return res.status(409).json({ error: 'Epic has no worktree' });
+
+      // An epic branch is compared against its workspace's sprint branch when
+      // one exists — that's what it forked from — and otherwise the repo
+      // default, which `getBranchInsights` resolves when `base` is undefined.
+      let base: string | undefined;
+      if (epic.sprint) {
+        const sprint = (await storage.getSprints()).find(s => s.id === epic.sprint);
+        if (sprint?.worktree) base = sprint.worktree.branch;
+      }
+
+      const remote = await getRemoteInfo(originalCwd);
+      const insights = await getBranchInsights({
+        cwd: wt.path,
+        branch: wt.branch,
+        base,
+        remote,
+      });
+      res.json({ insights, remote });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to read branch insights' });
+    }
+  });
+
   // -------------------- PR flow (push + create/lookup) --------------------
-  // Each sprint owns a branch; tickets PR into the sprint branch, the sprint
-  // PRs into the repo default (main). Only user-triggered — no automatic
-  // pushes, no automatic PR creation. See core/prFlow.ts for the flow.
+  // Tickets PR into their epic branch (or the sprint branch when the ticket has
+  // no epic worktree), an epic PRs into its sprint branch or the repo default,
+  // and a sprint PRs into the repo default (main). Only user-triggered — no
+  // automatic pushes, no automatic PR creation. See core/prFlow.ts.
 
   function prErrorStatus(code: PrFlowError['code']): number {
     switch (code) {
@@ -1311,14 +1495,18 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const wt = found.ticket.worktree;
       if (!wt) return res.status(409).json({ error: { code: 'no_worktree', message: 'Ticket has no worktree' } });
 
-      // Base = sprint branch if the ticket is in a sprint with its own worktree,
-      // otherwise the repo's default branch (usually main). This is what makes
-      // "each sprint owns a working branch" actually work at PR time.
-      let base: string | undefined;
-      if (found.ticket.sprint) {
-        const sprint = (await storage.getSprints()).find(s => s.id === found.ticket.sprint);
-        if (sprint?.worktree) base = sprint.worktree.branch;
-      }
+      // Base = the epic branch when the ticket's epic has a worktree, else the
+      // sprint branch, else the repo's default branch (usually main). This is
+      // what makes "an epic owns a feature branch" actually work at PR time —
+      // a ticket PR targets its epic branch, and the epic branch is what gets
+      // reviewed into main.
+      const prEpic = found.ticket.epic
+        ? (await storage.getEpics()).find(e => e.id === found.ticket.epic)
+        : null;
+      const prSprint = found.ticket.sprint
+        ? (await storage.getSprints()).find(s => s.id === found.ticket.sprint)
+        : null;
+      let base = resolveTicketBase(prEpic, prSprint) || undefined;
       if (!base) base = await detectDefaultBase(wt.path);
 
       const title = `${found.ticket.type === 'bug' ? 'fix' : 'feat'}: ${found.ticket.title} (${id})`;
@@ -1328,6 +1516,54 @@ export async function startServer(args: ServeArgs): Promise<void> {
       }
       bodyParts.push('', `Ticket: \`${id}\``);
       const body = bodyParts.join('\n');
+
+      const gh: GhConfig = app.locals.gh ?? { available: false };
+      const result = await pushAndOpenPr(
+        { cwd: wt.path, head: wt.branch, base, title, body },
+        gh,
+      );
+      res.json(result);
+    } catch (error) {
+      if (error instanceof PrFlowError) {
+        return res.status(prErrorStatus(error.code)).json({
+          error: { code: error.code, message: error.message, detail: error.detail },
+        });
+      }
+      res.status(500).json({ error: { code: 'unknown', message: error instanceof Error ? error.message : String(error) } });
+    }
+  });
+
+  app.post('/api/epics/:id/pr', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const epic = (await storage.getEpics()).find(e => e.id === id);
+      if (!epic) return res.status(404).json({ error: { code: 'not_found', message: 'Epic not found' } });
+      const wt = epic.worktree;
+      if (!wt) return res.status(409).json({ error: { code: 'no_worktree', message: 'Epic has no worktree' } });
+
+      // An epic PRs into its workspace's sprint branch when that sprint has a
+      // worktree, otherwise straight into the repo default.
+      let base: string | undefined;
+      if (epic.sprint) {
+        const sprint = (await storage.getSprints()).find(s => s.id === epic.sprint);
+        if (sprint?.worktree) base = sprint.worktree.branch;
+      }
+      if (!base) base = await detectDefaultBase(wt.path);
+
+      const scopedTickets = (await storage.getAllTickets()).filter(t => t.epic === id);
+      const ticketList = scopedTickets.length > 0
+        ? scopedTickets.map(t => `- \`${t.id}\` (${t.status}) — ${t.title}`).join('\n')
+        : '_(no tickets attached)_';
+
+      const title = `Epic: ${epic.name} (${id})`;
+      const body = [
+        epic.goal?.trim() || epic.description?.trim() || '_(no goal set)_',
+        '',
+        `Epic: \`${id}\``,
+        '',
+        `## Tickets`,
+        ticketList,
+      ].join('\n');
 
       const gh: GhConfig = app.locals.gh ?? { available: false };
       const result = await pushAndOpenPr(
@@ -1500,14 +1736,19 @@ export async function startServer(args: ServeArgs): Promise<void> {
           action: { kind: 'filter', params: { view: 'list' } },
         });
       }
-      const backlog = inScope.filter(t => t.status === 'backlog');
-      if (backlog.length >= 4) {
+      // Was `draft_sprint` — "auto-balance a planning sprint from the backlog".
+      // A sprint frames the whole workspace since tas-hr2pCGjr, so every ticket
+      // already has one and there was nothing left to select. Epics are the
+      // in-workspace grouping, so the live signal is ungrouped backlog
+      // (tas-R0J1AGqs). `/api/ai/plan` drafts the epics.
+      const ungrouped = inScope.filter(t => t.status === 'backlog' && !t.epic);
+      if (ungrouped.length >= 4) {
         items.push({
-          id: 'draft_sprint',
+          id: 'draft_epics',
           severity: 'info',
-          title: `Draft the next sprint (${backlog.length} backlog tickets)`,
-          detail: 'Auto-balance a planning sprint from the backlog.',
-          action: { kind: 'draft_sprint', params: {} },
+          title: `${ungrouped.length} backlog tickets have no epic`,
+          detail: 'Group them into epics so the board reads as work streams.',
+          action: { kind: 'filter', params: { epic: 'none' } },
         });
       }
       res.json({
@@ -1519,38 +1760,59 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
+  // Drafts an *epic* out of a workspace's ungrouped backlog.
+  //
+  // Until tas-R0J1AGqs this drafted a sprint from the sprintless backlog. That
+  // selection is always empty under sprint-as-workspace (tas-hr2pCGjr) — every
+  // board ticket has a sprint — so the endpoint could only ever return an empty
+  // plan. Epics are the in-workspace grouping now, so the same "bucket the loose
+  // backlog" idea re-points one level down.
+  //
+  // Body: { sprint?: string ('none' = Unsorted), capacity?: number, commit?: boolean }
   app.post('/api/ai/plan', async (req, res) => {
     try {
-      const { capacity, commit } = req.body || {};
+      const { sprint: sprintQ, capacity, commit } = req.body || {};
       const all = await storage.getAllTickets();
-      const backlog = all.filter(t => t.status === 'backlog' && !t.sprint);
-      const totalPts = backlog.reduce((sum, t) => sum + (t.estimate || 0), 0);
+      const inWorkspace = all.filter(t => {
+        if (typeof sprintQ !== 'string' || sprintQ.length === 0) return true;
+        return sprintQ === 'none' ? !t.sprint : t.sprint === sprintQ;
+      });
+      const ungrouped = inWorkspace.filter(t => t.status === 'backlog' && !t.epic);
+      const totalPts = ungrouped.reduce((sum, t) => sum + (t.estimate || 0), 0);
       const cap = Math.max(8, Math.round(capacity ?? totalPts / 2));
       const priOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-      const sorted = [...backlog].sort((a, b) => (priOrder[a.priority || 'medium'] - priOrder[b.priority || 'medium']));
+      const sorted = [...ungrouped].sort((a, b) => (priOrder[a.priority || 'medium'] - priOrder[b.priority || 'medium']));
       const selected: any[] = [];
       let acc = 0;
       for (const t of sorted) {
         const pts = t.estimate || 0;
         if (acc + pts <= cap) { selected.push(t); acc += pts; }
       }
-      const sprints = await storage.getSprints();
-      const planningCount = sprints.filter(s => s.status === 'planning').length + 1;
+      const targetSprint = typeof sprintQ === 'string' && sprintQ.length > 0 && sprintQ !== 'none'
+        ? sprintQ
+        : undefined;
+      const epics = await storage.getEpics();
+      const scopedEpics = targetSprint ? epics.filter(e => e.sprint === targetSprint) : epics;
       const plan = {
-        name: `Planned Sprint ${planningCount}`,
-        goal: `Auto-balanced to ~${cap} pts · ${selected.length} of ${backlog.length} backlog tickets (${acc} pts)`,
+        name: `Planned Epic ${scopedEpics.length + 1}`,
+        goal: `Auto-balanced to ~${cap} pts · ${selected.length} of ${ungrouped.length} ungrouped backlog tickets (${acc} pts)`,
         capacity: cap,
         selectedPoints: acc,
+        sprint: targetSprint ?? null,
         ticketIds: selected.map(t => t.id),
       };
       if (!commit) return res.json({ plan });
-      const sprint = await storage.createSprint(plan.name, { goal: plan.goal, status: 'planning' });
-      broadcast(wss, { type: 'sprint_created', data: sprint });
+      const epic = await storage.createEpic(plan.name, {
+        goal: plan.goal,
+        status: 'planning',
+        ...(targetSprint ? { sprint: targetSprint } : {}),
+      });
+      broadcast(wss, { type: 'epic_created', data: epic });
       for (const t of selected) {
-        const updated = await storage.updateTicket(t.id, { sprint: sprint.id });
+        const updated = await storage.updateTicket(t.id, { epic: epic.id });
         if (updated) broadcast(wss, { type: 'ticket_updated', data: updated });
       }
-      res.json({ plan, sprint });
+      res.json({ plan, epic });
     } catch (error) {
       res.status(503).json({ error: { code: 'ai_unavailable', message: 'AI service unavailable' } });
     }

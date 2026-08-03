@@ -39,6 +39,11 @@ export interface Epic extends BaseEntity {
   color?: string;
   goal?: string;
   sprint?: string; // Sprint (workspace) ID this epic lives under
+  // An epic is the unit that maps to a feature branch — a sprint frames the
+  // whole workspace, so basing every ticket off one long-lived sprint branch is
+  // a weak default. Ticket worktrees prefer this branch as their base when it
+  // exists, falling back to the sprint branch then HEAD (tas-IK2HcQWo).
+  worktree?: TicketWorktree | null;
 }
 
 export interface TicketWorktree {

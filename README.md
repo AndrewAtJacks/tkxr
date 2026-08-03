@@ -266,7 +266,8 @@ tkxr epic set tas-abc12345 epi-abc12345               # attach ticket to epic
 tkxr epic set tas-abc12345 --unset                    # ungroup
 tkxr delete epi-abc12345 --force                      # ungroups its tickets, keeps them
 
-tkxr create epic "Auth" --sprint spr-abc12345         # alias for `epic create`
+tkxr create epic "Auth" --sprint spr-abc12345 --goal "Ship SSO" --color "#7c3aed"
+                                                      # alias for `epic create`
 tkxr list epics --sprint none --status active         # same filters as `tkxr epics`
 ```
 
@@ -280,12 +281,17 @@ sprint-scoped, so such a ticket would not appear under the epic you filed it in.
 
 ### Worktrees
 
-Per-ticket and per-sprint git worktrees let multiple agents work in parallel on isolated branches.
+Per-ticket, per-epic and per-sprint git worktrees let multiple agents work in parallel on isolated branches.
 
 ```bash
 tkxr worktree create tas-abc12345
 # → creates ../<repo>-worktrees/tas-abc12345 on branch tkxr/tas-abc12345,
-#   based on the sprint branch if the ticket's sprint has a worktree, else HEAD.
+#   based on the epic branch if the ticket's epic has a worktree,
+#   else the sprint branch if its sprint has one, else HEAD.
+
+tkxr worktree create epi-abc12345
+# → creates ../<repo>-worktrees/epics/epi-abc12345 on branch tkxr/epic/epi-abc12345,
+#   based on the sprint branch if the epic's workspace has a worktree, else HEAD.
 
 tkxr worktree create spr-abc12345
 # → creates ../<repo>-worktrees/sprints/spr-abc12345 on branch tkxr/sprint/spr-abc12345.
@@ -293,6 +299,7 @@ tkxr worktree create spr-abc12345
 tkxr worktree list
 tkxr worktree remove tas-abc12345                     # deletes the dir + merged branch
 tkxr worktree remove tas-abc12345 --keep-branch       # keep the branch around
+tkxr worktree remove epi-abc12345
 tkxr worktree remove spr-abc12345 --force
 ```
 
@@ -300,7 +307,20 @@ Options for `create`: `--path <dir>`, `--branch <name>`, `--base <ref>`.
 Options for `remove`: `--force`, `--keep-branch`.
 Override the worktree parent directory with the `TKXR_WORKTREE_ROOT` env var.
 
-Ticket branches default to being based on the parent sprint's branch when the sprint has its own worktree, so per-ticket branches nest cleanly under the sprint branch.
+**Branch hierarchy.** An epic is the unit that maps to a feature branch, so a
+ticket branch bases on its **epic** branch when the epic has a worktree, falling
+back to its **sprint** branch, then `HEAD`. A sprint frames the whole workspace,
+so basing every ticket in it off one long-lived sprint branch is only the right
+default when the tickets have no epic. Sprint worktrees still earn their keep for
+the orchestrator flow, which merges ticket branches into the sprint branch.
+
+The same order drives PRs: a ticket PRs into its epic branch (or the sprint
+branch when it has no epic worktree), an epic PRs into its sprint branch or the
+repo default, and a sprint PRs into the repo default.
+
+Deleting an epic or a sprint never removes its worktree — remove it explicitly
+first if you want tkxr to clean it up, since the record is the only thing that
+remembers the path.
 
 ### Servers
 
@@ -396,7 +416,7 @@ Epic mutations: `create_epic`, `edit_epic`, `delete_epic`.
 
 User mutations: `create_user`, `edit_user`, `delete_user`.
 
-Worktrees: `create_worktree`, `create_sprint_worktree`, `remove_worktree`.
+Worktrees: `create_worktree`, `create_epic_worktree`, `create_sprint_worktree`, `remove_worktree`, `remove_epic_worktree`, `remove_sprint_worktree`.
 
 Call `agent_guide` first if you're not sure — it returns a short markdown briefing on the data model, typical flow, dependency rules, and worktree conventions.
 
@@ -433,13 +453,24 @@ Branch deletion is never destructive either: `worktree remove` deletes the
 branch only when it is fully merged, and otherwise keeps it and tells you. Use
 `git branch -D <branch>` if you really want to discard unmerged work.
 
-For a sprint (fan-out to multiple agents):
+For an epic (the usual fan-out — an epic is one feature branch):
+
+```bash
+tkxr worktree create epi-abc12345
+# Each ticket in the epic gets its own worktree, branched off the epic branch:
+tkxr worktree create tas-111
+tkxr worktree create tas-222
+# ... agents work concurrently, each PRing into tkxr/epic/epi-abc12345 ...
+tkxr epic status epi-abc12345 completed     # status only — worktrees stay put
+tkxr worktree remove epi-abc12345           # clean up once the epic branch lands
+```
+
+For a sprint (workspace-wide integration, e.g. the orchestrator flow):
 
 ```bash
 tkxr worktree create spr-abc12345
-# Each ticket in the sprint gets its own worktree, branched off the sprint branch:
-tkxr worktree create tas-111
-tkxr worktree create tas-222
+# Tickets with no epic worktree branch off the sprint branch instead:
+tkxr worktree create tas-333
 # ... agents work concurrently ...
 tkxr sprint status spr-abc12345 completed   # status only — worktrees stay put
 tkxr worktree remove spr-abc12345           # clean up when you're ready
@@ -543,8 +574,18 @@ DELETE /api/epics/:id
 GET    /api/worktrees
 POST   /api/tickets/:id/worktree
 DELETE /api/tickets/:id/worktree
+POST   /api/epics/:id/worktree
+DELETE /api/epics/:id/worktree
 POST   /api/sprints/:id/worktree
 DELETE /api/sprints/:id/worktree
+
+# Branch insights + PR flow (per ticket / epic / sprint)
+GET    /api/tickets/:id/git
+POST   /api/tickets/:id/pr
+GET    /api/epics/:id/git
+POST   /api/epics/:id/pr
+GET    /api/sprints/:id/git
+POST   /api/sprints/:id/pr
 
 # MCP over HTTP
 POST   /mcp
@@ -557,7 +598,8 @@ GET    /api/mcp/guide                    (markdown agent guide)
 POST   /api/ai/ask
 POST   /api/ai/create
 POST   /api/ai/triage
-POST   /api/ai/plan
+POST   /api/ai/plan                      (drafts an epic from a workspace's ungrouped backlog;
+                                          body { sprint?, capacity?, commit? })
 
 # Claude CLI runner (streams over WebSocket, see Configuration section)
 POST   /api/claude/run                   ({ prompt, cwd?, runId?, label? })

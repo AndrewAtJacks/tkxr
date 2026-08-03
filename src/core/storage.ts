@@ -243,10 +243,10 @@ export class ProjectStorage {
     return sprint;
   }
 
-  async deleteSprint(sprintId: string): Promise<{ ok: boolean; sweptTickets: Ticket[] }> {
+  async deleteSprint(sprintId: string): Promise<{ ok: boolean; sweptTickets: Ticket[]; sweptEpics: Epic[] }> {
     const sprints = await this.getSprints();
     const index = sprints.findIndex(s => s.id === sprintId);
-    if (index === -1) return { ok: false, sweptTickets: [] };
+    if (index === -1) return { ok: false, sweptTickets: [], sweptEpics: [] };
     sprints.splice(index, 1);
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
 
@@ -283,25 +283,27 @@ export class ProjectStorage {
 
     // Detach epics that belonged to this sprint so they don't dangle under a
     // deleted workspace. They keep their tickets but become sprintless until
-    // reassigned (mirrors how tickets get their sprint cleared above).
+    // reassigned (mirrors how tickets get their sprint cleared above). Returned
+    // alongside the tickets so callers can broadcast epic_updated for each —
+    // without that an open board keeps rendering them under the dead sprint.
+    const sweptEpics: Epic[] = [];
     try {
       const epics = await this.getEpics();
-      let touchedEpics = false;
       for (const e of epics) {
         if (e.sprint === sprintId) {
           e.sprint = undefined;
           e.updatedAt = new Date();
-          touchedEpics = true;
+          sweptEpics.push(e);
         }
       }
-      if (touchedEpics) {
+      if (sweptEpics.length > 0) {
         await fs.writeFile(this.epicsPath, JSON.stringify(epics, null, 2), 'utf8');
       }
     } catch {
       // epics.json missing / unreadable — nothing to detach.
     }
 
-    return { ok: true, sweptTickets };
+    return { ok: true, sweptTickets, sweptEpics };
   }
 
   // Epic CRUD
@@ -339,7 +341,7 @@ export class ProjectStorage {
     }
   }
 
-  async updateEpic(id: string, updates: Partial<Pick<Epic, 'name' | 'description' | 'goal' | 'status' | 'color' | 'sprint'>>): Promise<Epic | null> {
+  async updateEpic(id: string, updates: Partial<Pick<Epic, 'name' | 'description' | 'goal' | 'status' | 'color' | 'sprint' | 'worktree'>>): Promise<Epic | null> {
     const epics = await this.getEpics();
     const epic = epics.find(e => e.id === id);
     if (!epic) return null;

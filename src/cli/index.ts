@@ -60,6 +60,8 @@ function showHelp() {
   console.log('  create <type> <title>     Create an entity (task, bug, sprint, epic, user)');
   console.log('    --sprint <id>           Workspace for a task/bug, or for a new epic');
   console.log('    --epic <id>             Epic for a task/bug');
+  console.log('    --goal <text>           One-line goal (epic only)');
+  console.log('    --color <hex>           Chip color like #4c8dff (epic only)');
   console.log('  new <type> <title>        Alias for create');
   console.log('  list [type]               List tickets (optionally filter by type)');
   console.log('  show <id>                 Show detailed ticket information');

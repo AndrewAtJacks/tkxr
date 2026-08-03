@@ -39,6 +39,17 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
       console.log(`  Username: ${(entity as any).username}`);
     }
 
+    // Deleting never touches a worktree (bug-MtPFb7dg), but the record is the
+    // only thing that remembers the path — once it's gone the directory and
+    // branch are orphaned and only `git worktree remove` can clean them up.
+    // The web UI warns in its confirm dialog; this is the same warning for the
+    // CLI (tas-IK2HcQWo).
+    const wt = entity && typeof entity === 'object' ? (entity as any).worktree : null;
+    if (wt?.path) {
+      console.log(chalk.yellow(`  Worktree at ${wt.path} (branch ${wt.branch}) is left in place and tkxr stops tracking it.`));
+      console.log(chalk.dim(`  Remove it first if you want tkxr to clean it up: tkxr worktree remove ${id}`));
+    }
+
     // Confirm deletion unless --force is specified
     if (!args.force) {
       console.log(chalk.red('Use --force to confirm deletion'));
@@ -62,6 +73,10 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
     // Deleting an epic clears `epic` on every ticket that pointed at it, so we
     // need the swept list to re-broadcast those tickets to the board.
     let sweptTickets: Awaited<ReturnType<typeof storage.deleteEpic>>['sweptTickets'] = [];
+    // Deleting a sprint detaches its epics too — they survive but become
+    // sprintless, so they need re-broadcasting or an open board keeps drawing
+    // them under a workspace that no longer exists.
+    let sweptEpics: Awaited<ReturnType<typeof storage.deleteSprint>>['sweptEpics'] = [];
     if (entityType === 'users') {
       const r = await storage.deleteUser(id);
       deleted = r.deleted;
@@ -70,6 +85,11 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
       const r = await storage.deleteEpic(id);
       deleted = r.ok;
       sweptTickets = r.sweptTickets;
+    } else if (entityType === 'sprints') {
+      const r = await storage.deleteSprint(id);
+      deleted = r.ok;
+      sweptTickets = r.sweptTickets;
+      sweptEpics = r.sweptEpics;
     } else {
       deleted = await storage.deleteEntity(entityType, id);
     }
@@ -79,6 +99,19 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
         await notifier.notifyTicketDeleted(id);
       } else if (entityType === 'sprints') {
         await notifier.notifySprintDeleted(id);
+        for (const e of sweptEpics) {
+          await notifier.notifyEpicUpdated(e);
+        }
+        for (const t of sweptTickets) {
+          await notifier.notifyTicketUpdated(t);
+        }
+        if (sweptTickets.length) {
+          console.log(chalk.dim(`  Detached ${sweptTickets.length} ticket(s): ${sweptTickets.map(t => t.id).join(', ')}`));
+          console.log(chalk.dim('  They moved to the Unsorted workspace — find them with: tkxr list --sprint none'));
+        }
+        if (sweptEpics.length) {
+          console.log(chalk.dim(`  Detached ${sweptEpics.length} epic(s): ${sweptEpics.map(e => e.id).join(', ')}`));
+        }
       } else if (entityType === 'epics') {
         await notifier.notifyEpicDeleted(id);
         for (const t of sweptTickets) {
