@@ -249,34 +249,82 @@ async function worktreeDirGone(wtPath: string): Promise<boolean> {
   }
 }
 
-export async function removeWorktree(opts: RemoveWorktreeOptions): Promise<void> {
+/**
+ * Compare two filesystem paths for identity. Git reports worktree paths with
+ * forward slashes; `path.resolve` normalises separators, and Windows paths are
+ * case-insensitive so the comparison has to be too.
+ */
+function samePath(a: string, b: string): boolean {
+  const x = path.resolve(a);
+  const y = path.resolve(b);
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
+
+/** True when git still tracks a worktree at this exact path. */
+async function gitTracksWorktree(wtPath: string, repoRoot: string): Promise<boolean> {
+  try {
+    const worktrees = await listWorktrees(repoRoot);
+    return worktrees.some(w => samePath(w.path, wtPath));
+  } catch {
+    // Can't tell — assume it is tracked, so we attempt the removal and surface
+    // a real error rather than silently reporting success.
+    return true;
+  }
+}
+
+export interface RemoveWorktreeResult {
+  /**
+   * Git wasn't tracking this path, so there was no worktree to remove — the
+   * caller's stored record was the only thing left pointing at it.
+   */
+  alreadyUntracked: boolean;
+  /**
+   * The directory is still on disk and git no longer knows about it, so nothing
+   * here can clean it up. Callers should say so rather than reporting a removal
+   * that didn't happen.
+   */
+  dirRemains: boolean;
+}
+
+export async function removeWorktree(opts: RemoveWorktreeOptions): Promise<RemoveWorktreeResult> {
   const cwd = opts.cwd || process.cwd();
   if (!(await isGitRepo(cwd))) {
     throw new Error('Not a git repository.');
   }
   const repoRoot = await getRepoRoot(cwd);
-  const forceFlag = opts.force ? '--force' : '';
-  const quoted = `"${opts.path}"`;
-  try {
-    await run(`git worktree remove ${forceFlag} ${quoted}`.replace(/\s+/g, ' ').trim(), repoRoot);
-  } catch (err: any) {
-    // Only prune when the directory is genuinely gone — i.e. this failed
-    // because git and the filesystem had already diverged.
-    //
-    // Pruning unconditionally here is what used to orphan a half-removed
-    // worktree: `git worktree remove` can delete much of the tree (including
-    // the `.git` file) and then fail on, say, a locked file under
-    // node_modules. Prune then sees a worktree whose `.git` file is missing
-    // and drops its admin entry, finalising the very removal that failed. The
-    // result is a directory git no longer tracks and `git worktree repair`
-    // cannot recover. Leave a partial failure alone so the caller can retry
-    // with force, or clean up by hand.
-    if (await worktreeDirGone(opts.path)) {
-      await run('git worktree prune', repoRoot).catch(() => {});
+
+  // `git worktree prune` is repo-GLOBAL: it drops the admin entry of every
+  // worktree whose `.git` file is missing, not just the one being removed. That
+  // made any prune here collateral damage — a successful removal would finalise
+  // unrelated half-removed worktrees, turning a state `git worktree repair`
+  // could still fix into an unrecoverable orphan. That is the same failure
+  // bug-MtPFb7dg was filed for, reached by a different route (bug-NGyF3rA_).
+  //
+  // So: no prune, ever. `git worktree remove` already removes its own admin
+  // entry on success, and on failure the entry must survive precisely so the
+  // caller can retry or repair. Reconciliation is scoped to a lookup instead.
+  const tracked = await gitTracksWorktree(opts.path, repoRoot);
+
+  if (tracked) {
+    const forceFlag = opts.force ? '--force' : '';
+    const quoted = `"${opts.path}"`;
+    try {
+      await run(`git worktree remove ${forceFlag} ${quoted}`.replace(/\s+/g, ' ').trim(), repoRoot);
+    } catch (err: any) {
+      throw new Error(`git worktree remove failed: ${(err.stderr || err.message || '').trim()}`);
     }
-    throw new Error(`git worktree remove failed: ${(err.stderr || err.message || '').trim()}`);
   }
-  await run('git worktree prune', repoRoot).catch(() => {});
+  // When git isn't tracking the path there is nothing to remove and the desired
+  // end state already holds, so this is a success rather than the hard error it
+  // used to be. Without that, a record whose worktree git had forgotten could
+  // never be cleared from any surface — every retry failed identically with
+  // "is not a working tree" (bug-6Kx3khqN).
+
+  const result: RemoveWorktreeResult = {
+    alreadyUntracked: !tracked,
+    dirRemains: !tracked && !(await worktreeDirGone(opts.path)),
+  };
+
   if (opts.branch && !opts.keepBranch) {
     // `-d`, not `-D`: refuse to delete a branch holding unmerged commits.
     // The old force-delete discarded them outright — losing work whenever a
@@ -290,6 +338,8 @@ export async function removeWorktree(opts: RemoveWorktreeOptions): Promise<void>
       throw new BranchKeptError(opts.branch, (err.stderr || err.message || '').trim());
     }
   }
+
+  return result;
 }
 
 /**

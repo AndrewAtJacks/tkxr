@@ -1160,8 +1160,9 @@ export const TOOLS: ToolDef[] = [
       const wt = epic.worktree;
       if (!wt) return errorResult(`Epic has no worktree.`);
       let branchKept: string | null = null;
+      let outcome = { alreadyUntracked: false, dirRemains: false };
       try {
-        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: repoCwd });
+        outcome = await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: repoCwd });
       } catch (err) {
         if (!(err instanceof BranchKeptError)) {
           return errorResult(err instanceof Error ? err.message : String(err));
@@ -1170,7 +1171,7 @@ export const TOOLS: ToolDef[] = [
       }
       const updated = await storage.updateEpic(epicId, { worktree: null });
       if (updated) broadcast?.({ type: 'epic_updated', data: updated });
-      return jsonResult({ epic: updated, removed: wt, branchKept });
+      return jsonResult({ epic: updated, removed: wt, branchKept, ...outcome });
     },
   },
   {
@@ -1191,8 +1192,9 @@ export const TOOLS: ToolDef[] = [
       const wt = found.ticket.worktree;
       if (!wt) return errorResult(`Ticket has no worktree.`);
       let branchKept: string | null = null;
+      let outcome = { alreadyUntracked: false, dirRemains: false };
       try {
-        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: repoCwd });
+        outcome = await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: repoCwd });
       } catch (err) {
         if (!(err instanceof BranchKeptError)) {
           return errorResult(err instanceof Error ? err.message : String(err));
@@ -1201,7 +1203,7 @@ export const TOOLS: ToolDef[] = [
       }
       const updated = await storage.updateTicket(ticketId, { worktree: null });
       if (updated) broadcast?.({ type: 'ticket_updated', data: updated });
-      return jsonResult({ ticket: updated, removed: wt, branchKept });
+      return jsonResult({ ticket: updated, removed: wt, branchKept, ...outcome });
     },
   },
   {

@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Fixed
+- **A successful worktree removal no longer prunes other half-removed
+  worktrees.** `git worktree prune` is repo-global, so the prune that
+  ran after every successful removal swept the admin entry of any
+  worktree whose `.git` file was missing — turning a partial failure
+  that `git worktree repair` could still fix into an unrecoverable
+  orphan. That is the same outcome bug-MtPFb7dg was filed for, reached
+  by a different route. There is now no prune at all: `git worktree
+  remove` already clears its own entry on success, and on failure the
+  entry has to survive so the removal can be retried or repaired
+  (bug-NGyF3rA_).
+- **A worktree record can be cleared once git has forgotten the path.**
+  Removal shelled out to `git worktree remove` unconditionally, so if
+  git no longer tracked the path the command failed with "is not a
+  working tree" and the record survived — on every surface, on every
+  retry, with no way out but editing the store by hand. Removal now
+  checks whether git tracks the path first and treats "it doesn't" as
+  the end state already holding: the record is cleared and the response
+  says so via `alreadyUntracked`, plus `dirRemains` when the directory
+  is still on disk and only the user can delete it (bug-6Kx3khqN).
+
 Sprints change role: a sprint now frames the whole workspace instead of
 being one grouping among many, and **epics** take over the job of
 grouping tickets inside it. This changes what you see on first load —
