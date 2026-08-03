@@ -1,8 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import { sprintStore, type Sprint } from './stores';
-  import { sprintDotColor } from './util';
   import { onTicketEvent } from './ticketEvents';
+  import SprintCard from './SprintCard.svelte';
   import Plus from './icons/Plus.svelte';
 
   // The sprint switcher is the "workspace picker" — a sprint now frames the
@@ -24,10 +24,15 @@
   let goal = '';
   let busy = false;
 
+  /** Lifecycle values a card's inline control can move a sprint between. */
+  const LIFECYCLE: Sprint['status'][] = ['planning', 'active', 'completed'];
+
   // Per-sprint totals come from `/api/tickets/summary`'s project-wide
   // `bySprint` bucket. The old client-side count read the parent's paged
   // ticket slice, so every card under-reported once paging kicked in.
+  // `sprintProgress` carries the done/open split from the same response.
   let bySprint: Record<string, number> = {};
+  let progress: Record<string, { total: number; done: number; open: number }> = {};
   let countsAbort: AbortController | null = null;
   async function fetchCounts() {
     if (countsAbort) countsAbort.abort();
@@ -38,6 +43,7 @@
       if (!res.ok) return;
       const j = await res.json();
       bySprint = j.bySprint || {};
+      progress = j.sprintProgress || {};
     } catch (err) {
       if ((err as any)?.name === 'AbortError') return;
     } finally {
@@ -59,16 +65,78 @@
   // pre-existing data, plus anything orphaned by deleting a sprint) would have
   // no route back into the UI.
   $: showUnsorted = unsortedCount > 0 || activeSprint === UNSORTED;
-  $: ordered = [...sprints].sort((a, b) => {
-    // Active workspaces first, then planning, then completed; newest within a bucket.
-    const rank = (s: Sprint) => (s.status === 'active' ? 0 : s.status === 'planning' ? 1 : 2);
-    const r = rank(a) - rank(b);
-    if (r !== 0) return r;
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
+  const byNewest = (a: Sprint, b: Sprint) =>
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  // Completed sprints move into their own section rather than sorting to the
+  // bottom of one list — a finished workspace shouldn't compete for attention
+  // with the ones still in flight, and the section is collapsed by default.
+  $: live = sprints.filter(s => s.status !== 'completed')
+    .sort((a, b) => {
+      const rank = (s: Sprint) => (s.status === 'active' ? 0 : 1);
+      const r = rank(a) - rank(b);
+      return r !== 0 ? r : byNewest(a, b);
+    });
+  $: completed = sprints.filter(s => s.status === 'completed').sort(byNewest);
+  // Open the completed section on arrival if that's where the current
+  // workspace lives, so the highlighted card isn't hidden behind a toggle.
+  let showCompleted = false;
+  let completedToggleInit = false;
+  $: if (!completedToggleInit && completed.length > 0) {
+    completedToggleInit = true;
+    showCompleted = completed.some(s => s.id === activeSprint);
+  }
+
+  function ticketCount(id: string): number {
+    return bySprint[id] || 0;
+  }
+  function pctDone(id: string): number {
+    const p = progress[id];
+    if (!p || p.total === 0) return 0;
+    return Math.round((p.done / p.total) * 100);
+  }
+  /** All tickets done but the sprint is still open — the wrap-it-up case. */
+  function readyToComplete(s: Sprint): boolean {
+    const p = progress[s.id];
+    return s.status !== 'completed' && !!p && p.total > 0 && p.open === 0;
+  }
 
   function pick(id: string) {
     dispatch('select', id);
+  }
+
+  /** Sprint ids with a status write in flight, so the control can lock. */
+  let pendingStatus: Record<string, boolean> = {};
+
+  async function setStatus(s: Sprint, status: Sprint['status']) {
+    if (s.status === status || pendingStatus[s.id]) return;
+    pendingStatus = { ...pendingStatus, [s.id]: true };
+    // `completed` goes through the dedicated endpoint so the sprint's epics
+    // roll up with it; the other transitions are a plain status write.
+    const url = status === 'completed'
+      ? `/api/sprints/${s.id}/complete`
+      : `/api/sprints/${s.id}/status`;
+    const init: RequestInit = status === 'completed'
+      ? { method: 'POST' }
+      : {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status }),
+        };
+    try {
+      const res = await fetch(url, init);
+      if (res.ok) {
+        // Patch the local store immediately: the parent's `reload` is async and
+        // the card would otherwise sit on its old status until it lands.
+        sprintStore.update((list: Sprint[]) =>
+          list.map(x => (x.id === s.id ? { ...x, status } : x)));
+        if (status === 'completed') showCompleted = true;
+        dispatch('reload');
+      }
+    } catch { /* noop */ }
+    finally {
+      const { [s.id]: _drop, ...rest } = pendingStatus;
+      pendingStatus = rest;
+    }
   }
 
   async function create() {
@@ -135,21 +203,18 @@
           </div>
         </button>
       {/if}
-      {#each ordered as s (s.id)}
-        <button class="sprint-card" class:active={s.id === activeSprint} on:click={() => pick(s.id)}>
-          <div class="card-top">
-            <span class="dot" style="background:{sprintDotColor(s.status)}"></span>
-            <span class="s-name">{s.name}</span>
-            <span class="s-status">{s.status}</span>
-          </div>
-          {#if s.goal}
-            <div class="s-goal">{s.goal}</div>
-          {/if}
-          <div class="card-foot">
-            <span class="mono">{bySprint[s.id] || 0} tickets</span>
-            {#if s.id === activeSprint}<span class="cur">current</span>{/if}
-          </div>
-        </button>
+      {#each live as s (s.id)}
+        <SprintCard
+          sprint={s}
+          active={s.id === activeSprint}
+          count={ticketCount(s.id)}
+          pct={pctDone(s.id)}
+          ready={readyToComplete(s)}
+          busy={!!pendingStatus[s.id]}
+          statuses={LIFECYCLE}
+          on:select={() => pick(s.id)}
+          on:status={(e) => setStatus(s, e.detail)}
+        />
       {/each}
 
       {#if creating}
@@ -168,6 +233,32 @@
         </button>
       {/if}
     </div>
+
+    {#if completed.length > 0}
+      <section class="completed-section">
+        <button class="section-toggle" on:click={() => (showCompleted = !showCompleted)}>
+          <span class="caret" class:open={showCompleted}>▸</span>
+          <span>Completed</span>
+          <span class="count">{completed.length}</span>
+        </button>
+        {#if showCompleted}
+          <div class="grid">
+            {#each completed as s (s.id)}
+              <SprintCard
+                sprint={s}
+                active={s.id === activeSprint}
+                count={ticketCount(s.id)}
+                pct={pctDone(s.id)}
+                busy={!!pendingStatus[s.id]}
+                statuses={LIFECYCLE}
+                on:select={() => pick(s.id)}
+                on:status={(e) => setStatus(s, e.detail)}
+              />
+            {/each}
+          </div>
+        {/if}
+      </section>
+    {/if}
 
     {#if sprints.length === 0 && !creating}
       <div class="empty-hint">
@@ -273,4 +364,33 @@
   }
   .primary:disabled { opacity: .5; cursor: default; }
   .empty-hint { margin-top: 20px; font-size: 12.5px; color: var(--faint); text-align: center; }
+
+  .completed-section { margin-top: 28px; }
+  .section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: none;
+    padding: 6px 0;
+    margin-bottom: 12px;
+    color: var(--muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .section-toggle:hover { color: var(--text); }
+  .caret { display: inline-block; transition: transform .12s; font-size: 10px; }
+  .caret.open { transform: rotate(90deg); }
+  .count {
+    font-family: 'IBM Plex Mono';
+    font-size: 10px;
+    color: var(--faint);
+    background: var(--surface);
+    border-radius: 999px;
+    padding: 1px 7px;
+  }
 </style>

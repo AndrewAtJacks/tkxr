@@ -32,6 +32,9 @@ export async function manageSprint(args: SprintArgs): Promise<void> {
     case 'status':
       await updateSprintStatus(rest);
       break;
+    case 'complete':
+      await completeSprint(rest);
+      break;
     case 'set':
       await setTicketSprint(rest, args);
       break;
@@ -54,6 +57,7 @@ function showSprintHelp() {
   console.log(chalk.green('Commands:'));
   console.log('  create <name>                 Create a new sprint');
   console.log('  status <id> <status>          Update sprint status');
+  console.log('  complete <id>                 Mark a sprint completed (rolls up its epics)');
   console.log('  set <ticket-id> <sprint-id>   Attach a ticket to a sprint');
   console.log('  set <ticket-id> --unset       Remove a ticket from its sprint');
   console.log('  edit <id> [options]           Edit sprint fields (name/desc/goal/dates)');
@@ -72,6 +76,7 @@ function showSprintHelp() {
   console.log('  tkxr sprint create "Sprint 1"');
   console.log('  tkxr sprint create "Feature Sprint" --description "Add new features" --goal "Complete user auth"');
   console.log('  tkxr sprint status spr-abc123 active');
+  console.log('  tkxr sprint complete spr-abc123');
   console.log('  tkxr sprint set tas-abc123 spr-abc123');
   console.log('  tkxr sprint set tas-abc123 --unset');
   console.log('  tkxr sprint edit spr-abc123 --name "Renamed" --goal "Ship v2"');
@@ -132,6 +137,13 @@ async function updateSprintStatus(rest: string[]): Promise<void> {
     process.exit(1);
   }
 
+  // Completing carries the epic rollup and the open-ticket report — same work
+  // either way, so `status <id> completed` is just an alias for `complete`.
+  if (status === 'completed') {
+    await completeSprint([id]);
+    return;
+  }
+
   try {
     const storage = await createStorage();
     
@@ -156,6 +168,69 @@ async function updateSprintStatus(rest: string[]): Promise<void> {
 
   } catch (error) {
     console.error(chalk.red('Error updating sprint status:'), error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
+/**
+ * `sprint status <id> completed` moves only the sprint; this also rolls its
+ * epics to `completed` so a closed workspace doesn't keep reporting active
+ * epics. Mirrors `POST /api/sprints/:id/complete` in the web UI.
+ */
+async function completeSprint(rest: string[]): Promise<void> {
+  const [id] = rest;
+
+  if (!id) {
+    console.error(chalk.red('Sprint ID is required.'));
+    console.log(chalk.gray('Usage: tkxr sprint complete <id>'));
+    process.exit(1);
+  }
+
+  try {
+    const storage = await createStorage();
+
+    const openTickets = (await storage.getAllTickets())
+      .filter(t => t.sprint === id && t.status !== 'done');
+
+    const result = await storage.completeSprint(id);
+
+    if (!result) {
+      console.error(chalk.red(`Sprint with ID "${id}" not found.`));
+      process.exit(1);
+    }
+
+    await notifier.notifySprintUpdated(result.sprint);
+    for (const epic of result.epics) {
+      await notifier.notifyEpicUpdated(epic);
+    }
+
+    console.log(chalk.green.bold('✓ Sprint completed!'));
+    console.log();
+    console.log(chalk.white.bold(result.sprint.name));
+    console.log(chalk.gray(`  ID: ${result.sprint.id}`));
+    console.log(chalk.gray(`  Status: `) + chalk.green(result.sprint.status));
+    if (result.epics.length > 0) {
+      console.log(chalk.gray(`  Epics rolled up: ${result.epics.length}`));
+      for (const epic of result.epics) {
+        console.log(chalk.gray(`    ${epic.id}  ${epic.name}`));
+      }
+    }
+    // Completing early is legitimate — carry-over is normal — so this reports
+    // rather than blocks. The tickets keep pointing at the closed sprint.
+    if (openTickets.length > 0) {
+      console.log();
+      console.log(chalk.yellow(`  ${openTickets.length} ticket${openTickets.length === 1 ? '' : 's'} still open in this sprint:`));
+      for (const t of openTickets.slice(0, 10)) {
+        console.log(chalk.gray(`    ${t.id}  [${t.status}]  ${t.title}`));
+      }
+      if (openTickets.length > 10) {
+        console.log(chalk.gray(`    …and ${openTickets.length - 10} more`));
+      }
+      console.log(chalk.gray('  Move them to another sprint with "tkxr sprint set <ticket-id> <sprint-id>".'));
+    }
+
+  } catch (error) {
+    console.error(chalk.red('Error completing sprint:'), error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
 }

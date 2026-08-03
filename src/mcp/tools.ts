@@ -777,7 +777,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'update_sprint_status',
-    description: 'Move a sprint through planning → active → completed.',
+    description: 'Move a sprint through planning → active → completed. Moving to `completed` also marks every epic under the sprint completed, matching the web "Complete sprint" action; the rolled-up epic ids come back in `completedEpicIds`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -787,6 +787,18 @@ export const TOOLS: ToolDef[] = [
       required: ['id', 'status'],
     },
     handler: async ({ id, status }, { storage, broadcast }) => {
+      // `completed` goes through completeSprint so the epic rollup happens on
+      // every path — CLI, REST and MCP — rather than only the two that
+      // remembered to do it themselves.
+      if (status === 'completed') {
+        const result = await storage.completeSprint(id);
+        if (!result) return errorResult(`Sprint "${id}" not found`);
+        broadcast?.({ type: 'sprint_updated', data: result.sprint });
+        for (const epic of result.epics) {
+          broadcast?.({ type: 'epic_updated', data: epic });
+        }
+        return jsonResult({ ...result.sprint, completedEpicIds: result.epics.map(e => e.id) });
+      }
       const updated = await storage.updateSprintStatus(id, status);
       if (!updated) return errorResult(`Sprint "${id}" not found`);
       broadcast?.({ type: 'sprint_updated', data: updated });

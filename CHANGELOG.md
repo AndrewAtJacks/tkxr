@@ -68,8 +68,41 @@
 - **Group the backlog into epics.** The triage panel's ungrouped-backlog
   finding now offers a Claude hand-off that buckets loose backlog
   tickets into epics (capped at 5, no status/priority changes).
+- **Sprint status management.** Completed sprints now have somewhere to
+  go. The sprint switcher splits into in-flight and a collapsed
+  **Completed** section, each card carries a done/total progress bar and
+  an inline planning / active / completed control, and a card whose
+  tickets are all done says so. Setting status no longer means opening
+  `SprintPanel` first — the picker is the one screen where every sprint
+  is visible side by side, which is where that comparison happens.
+- **"Complete sprint?" prompt.** Once every ticket in the active
+  workspace is done and the sprint is still open, a dismissible card
+  appears in the board's bottom-right corner with a one-click complete
+  action. Dismissals are per sprint and persist, but clear themselves
+  once the workspace stops being finished, so adding and finishing more
+  work prompts again. Suppressed while a side panel or Claude run panel
+  is open.
+- **Epic rollup on completion.** Completing a sprint marks every epic
+  under it `completed` too, on every path: `tkxr sprint complete <id>`,
+  `tkxr sprint status <id> completed`, `PUT /api/sprints/:id`,
+  `PUT /api/sprints/:id/status`, the new
+  `POST /api/sprints/:id/complete`, and the MCP `update_sprint_status`
+  tool. Epic status is a manual label that lags its tickets, so without
+  the rollup a closed workspace kept reporting active epics. Tickets are
+  untouched — carrying open tickets out of a completed sprint is normal,
+  and the CLI reports which ones they are rather than blocking.
+- **`sprintProgress` in `/api/tickets/summary`.** The done/open split
+  behind `bySprint`, also project-wide. Backs the switcher's progress
+  bars and the ready-to-complete test. `bySprint` keeps its flat-count
+  shape.
+- **`tkxr sprint complete <id>`.** Completes a sprint, lists the epics it
+  rolled up, and reports any tickets left open.
 
 ### Changed
+- **`tkxr sprints` groups by lifecycle.** In flight, then planning, then
+  completed (newest first within each), with a done/total ticket count
+  per sprint and a ready-to-complete flag — the CLI mirror of what the
+  switcher now shows. A `--status` filter still prints a flat list.
 - **Clicking an epic in the sidebar filters the board.** Editing moved
   to a small pencil button on the right of the row. It used to be the
   other way round, which put the rarer action on the bigger target —
@@ -176,6 +209,10 @@
   `commitSprintPrompt` is unchanged.
 
 ### Fixed
+- **`PUT /api/sprints/:id/status` broadcasts again.** It was the one
+  sprint mutation that skipped the WS broadcast its sibling
+  `PUT /api/sprints/:id` sends, so a status change never reached other
+  open boards — the card kept its old colour until a manual reload.
 - **A ticket moved between board columns no longer disappears.** Each
   board column is its own paged store scoped to one status, so a status
   change is two events: the source column drops the row, and the

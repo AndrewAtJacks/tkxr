@@ -243,13 +243,26 @@ tkxr user assign tas-abc12345 --unassign
 ### Sprints (workspaces)
 
 ```bash
-tkxr sprints
+tkxr sprints                                          # grouped: in flight, planning, completed
 tkxr sprint create "Sprint 1" --goal "Ship auth"
 tkxr sprint status spr-abc12345 active                # planning|active|completed
+tkxr sprint complete spr-abc12345                     # completed + roll up its epics
 tkxr sprint edit spr-abc12345 --name "Auth Sprint" --end-date 2026-08-01
 tkxr sprint set tas-abc12345 spr-abc12345             # move ticket into workspace
 tkxr sprint set tas-abc12345 --unset                  # back to Unsorted
 ```
+
+`tkxr sprints` groups by lifecycle so finished workspaces sink to the bottom,
+and prints each sprint's done/total ticket count. A sprint whose tickets are
+all done but is still open is flagged as ready to complete — the same
+condition that raises the web UI's "Complete sprint?" prompt.
+
+Completing a sprint also marks every epic under it `completed`, on every path
+(`sprint complete`, `sprint status … completed`, the REST routes, and the MCP
+`update_sprint_status` tool). Epic status is a manual label that lags its
+tickets, so without the rollup a closed workspace keeps reporting active epics.
+Tickets are left alone: carrying open tickets out of a completed sprint is
+normal, and the CLI just reports which ones they are.
 
 ### Epics (grouping within a workspace)
 
@@ -484,7 +497,7 @@ tkxr worktree create spr-abc12345
 # Tickets with no epic worktree branch off the sprint branch instead:
 tkxr worktree create tas-333
 # ... agents work concurrently ...
-tkxr sprint status spr-abc12345 completed   # status only — worktrees stay put
+tkxr sprint complete spr-abc12345           # status + epic rollup — worktrees stay put
 tkxr worktree remove spr-abc12345           # clean up when you're ready
 ```
 
@@ -574,6 +587,7 @@ GET    /api/sprints
 POST   /api/sprints
 PUT    /api/sprints/:id
 PUT    /api/sprints/:id/status
+POST   /api/sprints/:id/complete         (status → completed + roll up its epics)
 DELETE /api/sprints/:id
 
 # Epics
@@ -690,9 +704,17 @@ cross-workspace totals.
   },
   "byEpic":     { "none": 12, "epi-abc12345": 130 },
   "byAssignee": { "none": 6,  "use-alice001": 136 },
-  "bySprint":   { "none": 4,  "spr-abc12345": 142 }
+  "bySprint":   { "none": 4,  "spr-abc12345": 142 },
+  "sprintProgress": {
+    "none":         { "total": 4,   "done": 0,  "open": 4 },
+    "spr-abc12345": { "total": 142, "done": 89, "open": 53 }
+  }
 }
 ```
+
+`sprintProgress` is the done/open split behind `bySprint`, also always
+project-wide. The sprint switcher draws each card's progress bar from it, and
+`open === 0 && total > 0` is what marks a sprint ready to complete.
 
 The endpoint reloads from disk each call, so it always agrees with
 whatever `/api/tickets` last read. It broadcasts nothing on the WS bus —
