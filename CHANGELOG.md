@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-03
+
+A sprint becomes the top-level workspace that frames the whole board,
+epics arrive as the grouping inside it, and sprints gain status
+management. **Breaking:** sprint-level branches, worktrees and their
+REST/MCP surface are gone — an epic is the thing that maps to a feature
+branch now. See **Removed** below, and `docs/branching-model.md` for the
+rationale. Nothing on disk is rewritten: existing sprints keep working,
+and tickets with no sprint stay reachable through the new **Unsorted**
+workspace.
+
 ### Added
 - **Epic entity (`epi-*`).** New top-level record in `tkxr/epics.json`
   with `name`, `description`, `goal`, `color`, `status`
