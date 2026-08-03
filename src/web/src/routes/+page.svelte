@@ -236,6 +236,57 @@
     pagedTickets.resetAndFetch(currentQuery());
   }
 
+  // A newly created ticket can legitimately land outside the active filter set:
+  // auto-assigned to the current user while the board is scoped to one person,
+  // typed `task` while the Bugs chip is on, or titled something the search box
+  // doesn't match. Storage writes it, the board query correctly omits it, and
+  // the result reads as "the ticket was never created" — no card, no count
+  // change (column totals are server-side *filtered* counts), and refreshing
+  // doesn't help because every filter is persisted to localStorage.
+  //
+  // The worst offender was `activeUser === 'none'`: only TriagePanel's
+  // unassigned finding sets it, no sidebar row renders for it, and every new
+  // ticket self-assigns — so the filter was invisible *and* excluded exactly
+  // the tickets being created (bug-C7mpZAvb).
+  //
+  // So: drop the filters that hide it and say which ones went. Silently
+  // widening the view is a smaller surprise than a ticket that vanishes.
+  function revealCreated(created: Ticket): void {
+    const t = normalizeTicket(created) as Ticket;
+
+    // Workspace is not a filter we quietly undo — moving the board to another
+    // sprint is a bigger jump than creating a ticket asked for. Name where it
+    // landed and leave the board where the user put it.
+    if (activeSprint && (t.sprint || UNSORTED) !== activeSprint) {
+      const name = t.sprint
+        ? (($sprintStore as Sprint[]).find(s => s.id === t.sprint)?.name || t.sprint)
+        : 'Unsorted';
+      showToast(`${t.id} created in ${name} — switch workspace to see it`, 'info', 5000);
+      return;
+    }
+
+    const cleared: string[] = [];
+    if (activeEpic !== 'all' && (activeEpic === 'none' ? !!t.epic : t.epic !== activeEpic)) {
+      activeEpic = 'all';
+      cleared.push('epic');
+    }
+    if (activeUser !== 'all' && (activeUser === 'none' ? !!t.assignee : t.assignee !== activeUser)) {
+      activeUser = 'all';
+      cleared.push('person');
+    }
+    if (typeFilter !== 'all' && t.type !== typeFilter) {
+      typeFilter = 'all';
+      cleared.push('type');
+    }
+    if (search && !`${t.title} ${t.description || ''} ${t.id}`.toLowerCase().includes(search.toLowerCase())) {
+      search = '';
+      cleared.push('search');
+    }
+    if (cleared.length > 0) {
+      showToast(`Cleared the ${cleared.join(' + ')} filter${cleared.length === 1 ? '' : 's'} to show ${t.id}`, 'info', 4000);
+    }
+  }
+
   async function refreshCommentCounts() {
     try {
       const res = await fetch('/api/comments/counts');
@@ -674,6 +725,7 @@
             users={$userStore}
             {commentCounts}
             on:open={(e) => openTicket(e.detail)}
+            on:created={(e) => revealCreated(e.detail)}
             on:reload={reload}
           />
         {:else}
@@ -702,6 +754,9 @@
         defaultSprint={activeSprint && !isUnsorted ? activeSprint : null}
         defaultEpic={activeEpic !== 'all' && activeEpic !== 'none' ? activeEpic : null}
         defaultAssignee={activeUser !== 'all' && activeUser !== 'none' ? activeUser : null}
+        defaultType={typeFilter !== 'all' ? typeFilter : 'task'}
+        selfAssign={activeUser !== 'none'}
+        on:created={(e) => revealCreated(e.detail)}
         on:reload={reload}
         on:close={closePanel}
         on:openTicket={(e) => openTicket(e.detail)}

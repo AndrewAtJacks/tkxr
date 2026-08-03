@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Fixed
+- **New tickets no longer vanish behind the board's own filters**
+  (bug-C7mpZAvb). A ticket created from the New button or a column's
+  quick-add could land outside the active filter set — the server stored
+  it correctly and the board query correctly omitted it, so it read as
+  "the ticket was never created": no card, no count change (column
+  totals are server-side *filtered* counts), and refreshing didn't help
+  because every filter persists to `localStorage`. Four parts:
+  - The create panel seeds `type` from the toolbar's type chip, and no
+    longer self-assigns to the current user while the board is scoped to
+    unassigned tickets.
+  - Quick-add inherits the view it was typed into. It used to post only
+    `{type, title, status}`, so a card added inside a sprint workspace
+    was born with no sprint at all and could never appear in the column
+    it was typed into.
+  - Anything still excluded after that widens the view instead of
+    disappearing: the offending epic/person/type/search filter is
+    cleared and a toast names what went. A ticket created into another
+    workspace is reported rather than followed — switching sprints is a
+    bigger jump than creating a ticket asked for.
+  - The sidebar gained an **Unassigned** row. `activeUser = 'none'` was
+    only reachable from TriagePanel's unassigned finding and rendered
+    nothing at all, leaving "Everyone" un-highlighted — so the board
+    looked unfiltered while hiding every assigned ticket, including each
+    one the create panel had just self-assigned. That row is also the
+    drop target for unassigning, which moves off "Everyone", where
+    dropping a ticket never matched the label.
+
 ## [3.0.0] - 2026-08-03
 
 A sprint becomes the top-level workspace that frames the whole board,

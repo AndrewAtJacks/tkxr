@@ -209,8 +209,11 @@ function mergeById(existing: Ticket[], incoming: Ticket[]): Ticket[] {
  * predicate closely enough to keep `applyEvent` from showing stale rows. The
  * server is the source of truth — this is a best-effort filter so that WS
  * events for tickets outside the current view don't briefly appear.
+ *
+ * Exported because the create flow needs the same predicate to tell whether a
+ * ticket it just created would actually be visible (bug-C7mpZAvb).
  */
-function ticketMatchesQuery(t: Ticket, q: PagedTicketQuery): boolean {
+export function ticketMatchesQuery(t: Ticket, q: PagedTicketQuery): boolean {
   if (q.sprint) {
     if (q.sprint === 'none') { if (t.sprint) return false; }
     else if (t.sprint !== q.sprint) return false;
