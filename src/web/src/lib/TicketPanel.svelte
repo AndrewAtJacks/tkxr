@@ -283,21 +283,35 @@
     } catch { /* noop */ }
   }
 
+  // Coalesce into one pending patch rather than replacing it. Each call used to
+  // clear the timer and re-arm it closed over its *own* patch, so two edits
+  // inside the 300ms window sent only the second — while `Object.assign` had
+  // already applied both locally, so the panel showed the lost one as saved
+  // until a reload silently reverted it (bug-7bVl3-Kj).
+  let pending: any = {};
+
   function schedulePatch(patch: any) {
     if (!ticket || isCreate) return;
-    // optimistic local
     Object.assign(ticket, patch);
     ticket = { ...ticket };
+    Object.assign(pending, patch);
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = window.setTimeout(async () => {
+      const body = pending;
+      pending = {};
       try {
         const res = await fetch(`/api/tickets/${ticket!.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patch),
+          body: JSON.stringify(body),
         });
         if (res.ok) dispatch('reload');
-      } catch { /* noop */ }
+        // Failed send: fold the fields back in so the next edit retries them.
+        // Anything edited since wins, hence `pending` last.
+        else pending = { ...body, ...pending };
+      } catch {
+        pending = { ...body, ...pending };
+      }
     }, 300);
   }
 
@@ -363,6 +377,57 @@
         await loadComments();
       }
     } catch { /* noop */ }
+  }
+
+  // ---- Long comments collapse by default (tas-YerLNB5a) ----
+  // Agent comments on this project routinely run to hundreds of lines, which
+  // buries the conversation. Show an opening summary and let the reader expand.
+  //
+  // Thresholds are deliberately generous: a comment only collapses when it is
+  // long enough that scrolling past it is the actual complaint. Anything an
+  // ordinary human types stays untouched.
+  const COMMENT_LINE_LIMIT = 12;
+  const COMMENT_CHAR_LIMIT = 900;
+  /** Lines shown while collapsed. */
+  const COMMENT_PREVIEW_LINES = 6;
+
+  let expandedComments = new Set<string>();
+
+  function isLong(content: string): boolean {
+    if (!content) return false;
+    return content.length > COMMENT_CHAR_LIMIT
+      || content.split('\n').length > COMMENT_LINE_LIMIT;
+  }
+
+  /**
+   * The opening of the comment, trimmed to whole lines so a preview never cuts
+   * mid-word. Blank leading lines are dropped — a comment that starts with a
+   * heading followed by a blank line would otherwise preview as mostly nothing.
+   */
+  function summarise(content: string): string {
+    const lines = content.split('\n');
+    const preview: string[] = [];
+    for (const line of lines) {
+      if (preview.length === 0 && !line.trim()) continue;
+      preview.push(line);
+      if (preview.length >= COMMENT_PREVIEW_LINES) break;
+    }
+    let out = preview.join('\n');
+    if (out.length > COMMENT_CHAR_LIMIT) out = out.slice(0, COMMENT_CHAR_LIMIT).trimEnd();
+    return out + '…';
+  }
+
+  /** How much is hidden, so "Show more" says what it's worth. */
+  function sizeLabel(content: string): string {
+    const lines = content.split('\n').length;
+    return lines > COMMENT_LINE_LIMIT ? `${lines} lines` : `${content.length} chars`;
+  }
+
+  function toggleComment(id: string) {
+    // Reassign rather than mutate: Svelte 4 doesn't track Set mutation.
+    const next = new Set(expandedComments);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    expandedComments = next;
   }
 
   function usernameById(id?: string | null): string {
@@ -704,7 +769,17 @@
               <span class="c-name">{usernameById(c.author)}</span>
               <span class="c-time">{relativeTime(c.createdAt)}</span>
             </div>
-            <div class="c-content">{c.content}</div>
+            {#if isLong(c.content) && !expandedComments.has(c.id)}
+              <div class="c-content">{summarise(c.content)}</div>
+              <button class="c-toggle" on:click={() => toggleComment(c.id)}>
+                Show more <span class="c-size">· {sizeLabel(c.content)}</span>
+              </button>
+            {:else}
+              <div class="c-content">{c.content}</div>
+              {#if isLong(c.content)}
+                <button class="c-toggle" on:click={() => toggleComment(c.id)}>Show less</button>
+              {/if}
+            {/if}
           </div>
         </div>
       {/each}
@@ -1095,6 +1170,17 @@
   .c-name { font-size: 12px; font-weight: 600; color: var(--text); }
   .c-time { font-size: 10.5px; color: var(--faint); }
   .c-content { font-size: 12.5px; color: var(--text2); margin-top: 2px; white-space: pre-wrap; }
+  .c-toggle {
+    margin-top: 4px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 11.5px;
+    color: var(--accent);
+  }
+  .c-toggle:hover { text-decoration: underline; }
+  .c-size { color: var(--faint); }
   .c-input { display: flex; gap: 6px; }
   .c-input .input { flex: 1; }
 

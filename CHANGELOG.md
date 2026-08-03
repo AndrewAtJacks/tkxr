@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+- **Clicking an epic in the sidebar filters the board.** Editing moved
+  to a small pencil button on the right of the row. It used to be the
+  other way round, which put the rarer action on the bigger target —
+  you pick an epic to look at its tickets far more often than to rename
+  it (tas-StJGUFto).
+- **Long comments collapse by default.** A comment over 12 lines or 900
+  characters shows its opening few lines plus a "Show more" toggle that
+  says how much is hidden. Agent comments routinely run to hundreds of
+  lines and buried the conversation; anything a human typically types is
+  untouched (tas-YerLNB5a).
+
 ### Fixed
 - **A successful worktree removal no longer prunes other half-removed
   worktrees.** `git worktree prune` is repo-global, so the prune that
@@ -22,6 +34,15 @@
   the end state already holding: the record is cleared and the response
   says so via `alreadyUntracked`, plus `dirRemains` when the directory
   is still on disk and only the user can delete it (bug-6Kx3khqN).
+- **Panel edits inside the save debounce are no longer dropped.**
+  `schedulePatch` cleared its pending timer and re-armed it closed over
+  its *own* patch, so two field edits within 300ms sent only the second
+  — while both had already been applied locally, so the panel showed the
+  lost edit as saved until a reload silently reverted it. Patches now
+  coalesce into one pending object, and a failed send folds its fields
+  back so the next edit retries them. Fixed in `EpicPanel`,
+  `SprintPanel` and `TicketPanel`, which all shared the shape
+  (bug-7bVl3-Kj).
 
 Sprints change role: a sprint now frames the whole workspace instead of
 being one grouping among many, and **epics** take over the job of
