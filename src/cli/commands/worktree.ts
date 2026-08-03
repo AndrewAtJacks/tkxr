@@ -113,7 +113,7 @@ export async function manageWorktree(args: WorktreeArgs): Promise<void> {
       return;
     }
     try {
-      await removeWorktree({
+      const res = await removeWorktree({
         path: wt.path,
         branch: wt.branch,
         force: !!args.force,
@@ -121,9 +121,10 @@ export async function manageWorktree(args: WorktreeArgs): Promise<void> {
       });
       const updated = await storage.updateTicket(ticketId, { worktree: null });
       if (updated) await notifier.notifyTicketUpdated(updated);
-      console.log(chalk.green(`✓ Worktree removed`));
+      console.log(chalk.green(res.alreadyUntracked ? `✓ Worktree reference cleared` : `✓ Worktree removed`));
       console.log(`  Path:   ${wt.path}`);
       console.log(`  Branch: ${wt.branch}${args['keep-branch'] ? chalk.dim(' (kept)') : ' (deleted)'}`);
+      reportUntracked(res, wt.path);
     } catch (err) {
       // The worktree came off cleanly; only the branch delete was declined
       // because it still holds unmerged commits. That's the safe outcome.
@@ -194,7 +195,7 @@ async function epicOp(sub: string, epicId: string, args: WorktreeArgs, storage: 
       return;
     }
     try {
-      await removeWorktree({
+      const res = await removeWorktree({
         path: wt.path,
         branch: wt.branch,
         force: !!args.force,
@@ -202,9 +203,10 @@ async function epicOp(sub: string, epicId: string, args: WorktreeArgs, storage: 
       });
       const updated = await storage.updateEpic(epicId, { worktree: null });
       if (updated) await notifier.notifyEpicUpdated(updated);
-      console.log(chalk.green(`✓ Epic worktree removed`));
+      console.log(chalk.green(res.alreadyUntracked ? `✓ Epic worktree reference cleared` : `✓ Epic worktree removed`));
       console.log(`  Path:   ${wt.path}`);
       console.log(`  Branch: ${wt.branch}${args['keep-branch'] ? chalk.dim(' (kept)') : ' (deleted)'}`);
+      reportUntracked(res, wt.path);
     } catch (err) {
       if (err instanceof BranchKeptError) {
         const updated = await storage.updateEpic(epicId, { worktree: null });
@@ -221,6 +223,20 @@ async function epicOp(sub: string, epicId: string, args: WorktreeArgs, storage: 
   }
 
   console.log(chalk.red(`Unknown subcommand for epic: ${sub}`));
+}
+
+/**
+ * Say plainly when nothing was actually removed. Git had already forgotten the
+ * path, so all this cleared was tkxr's record — and if the directory is still
+ * there, only the user can deal with it (bug-6Kx3khqN).
+ */
+function reportUntracked(res: { alreadyUntracked: boolean; dirRemains: boolean }, wtPath: string) {
+  if (!res.alreadyUntracked) return;
+  console.log(chalk.dim('  git was no longer tracking this worktree — only the tkxr record was cleared.'));
+  if (res.dirRemains) {
+    console.log(chalk.yellow(`  The directory is still on disk: ${wtPath}`));
+    console.log(chalk.dim('  git cannot remove it now that it has been pruned. Delete it by hand.'));
+  }
 }
 
 function showHelp() {
