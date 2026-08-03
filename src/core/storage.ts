@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { nanoid } from 'nanoid';
 import type { Ticket, Sprint, Epic, User, TicketType, TicketStatus, TicketComment } from './types.js';
+import { COLOR_ERROR, isValidColor } from './color.js';
 
 // --- queryTickets support -----------------------------------------------------
 // Kept in this file (rather than types.ts) because they describe the *storage*
@@ -286,28 +287,51 @@ export class ProjectStorage {
     // reassigned (mirrors how tickets get their sprint cleared above). Returned
     // alongside the tickets so callers can broadcast epic_updated for each —
     // without that an open board keeps rendering them under the dead sprint.
-    const sweptEpics: Epic[] = [];
+    //
+    // Only populated once the write has actually landed. Filling it as the
+    // epics are mutated would mean a failed write still returned them, and
+    // every caller broadcasts `epic_updated` per entry — clients would render
+    // the epics as sprintless while disk still said otherwise, and stay that
+    // way until something forced a refetch.
+    let sweptEpics: Epic[] = [];
     try {
       const epics = await this.getEpics();
+      const detached: Epic[] = [];
       for (const e of epics) {
         if (e.sprint === sprintId) {
           e.sprint = undefined;
           e.updatedAt = new Date();
-          sweptEpics.push(e);
+          detached.push(e);
         }
       }
-      if (sweptEpics.length > 0) {
+      if (detached.length > 0) {
         await fs.writeFile(this.epicsPath, JSON.stringify(epics, null, 2), 'utf8');
+        sweptEpics = detached;
       }
     } catch {
-      // epics.json missing / unreadable — nothing to detach.
+      // epics.json missing / unreadable, or the write failed — either way the
+      // detachment didn't persist, so report none rather than a false positive.
     }
 
     return { ok: true, sweptTickets, sweptEpics };
   }
 
   // Epic CRUD
+  /**
+   * `color` is interpolated into an inline `style` by the web client, so it has
+   * to stay a hex literal. Every caller validates first and returns a proper
+   * 400 / exit-1; this is the backstop that keeps the invariant attached to the
+   * write instead of to six call sites, so a new write path can't quietly opt
+   * out. Reaching it means a caller skipped its check — a bug, hence a throw
+   * rather than a silent strip (tas-nuu2zscR).
+   */
+  private assertValidColor(color: unknown): void {
+    if (color === undefined || color === null) return;
+    if (!isValidColor(color)) throw new Error(COLOR_ERROR);
+  }
+
   async createEpic(name: string, options: Partial<Epic> = {}): Promise<Epic> {
+    this.assertValidColor(options.color);
     const now = new Date();
     const epic: Epic = {
       id: this.generateId('epic'),
@@ -342,6 +366,7 @@ export class ProjectStorage {
   }
 
   async updateEpic(id: string, updates: Partial<Pick<Epic, 'name' | 'description' | 'goal' | 'status' | 'color' | 'sprint' | 'worktree'>>): Promise<Epic | null> {
+    this.assertValidColor(updates.color);
     const epics = await this.getEpics();
     const epic = epics.find(e => e.id === id);
     if (!epic) return null;

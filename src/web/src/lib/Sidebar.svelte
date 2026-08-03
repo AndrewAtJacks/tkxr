@@ -187,8 +187,14 @@
   // level down (tas-HnASryio). Server-computed, so unlike the `tickets`
   // fallbacks these stay correct when only page 1 is loaded. No fallback: a
   // burn figure derived from one page is worse than no burn figure.
+  //
+  // Zero-point epics fall back too: "0/0" reads as "nothing here" when the epic
+  // may hold plenty of unestimated tickets, so the plain count is more honest.
   $: epicBurn = new Map(
-    epics.map(e => [e.id, summary?.pointsByEpic?.[e.id] || null]),
+    epics.map(e => {
+      const b = summary?.pointsByEpic?.[e.id];
+      return [e.id, b && b.total > 0 ? b : null];
+    }),
   );
   $: userCounts = new Map(
     users.map(u => [

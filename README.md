@@ -595,6 +595,9 @@ GET    /api/mcp/tools                    (plain tool list)
 GET    /api/mcp/guide                    (markdown agent guide)
 
 # AI stubs (return scaffolded responses until wired to a model)
+# Only /api/ai/create has an in-app caller. `triage` and `plan` are external /
+# agent surfaces: the web app computes triage findings client-side and hands
+# planning to the Claude runner, so changing them moves nothing in the UI.
 POST   /api/ai/ask
 POST   /api/ai/create
 POST   /api/ai/triage

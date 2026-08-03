@@ -4,6 +4,8 @@
   import { claudeAvailable } from './settings';
   import { runPrompt } from './claudeRun';
   import { epicPlanPrompt, sprintBreakdownPrompt, triagePrompt } from './prompts';
+  import { normalizeTicket } from './util';
+  import { showToast } from './clipboard';
   import Sparkles from './icons/Sparkles.svelte';
   import X from './icons/X.svelte';
 
@@ -89,11 +91,39 @@
   }
   // Hand the ungrouped backlog to Claude to bucket into epics. The epic-shaped
   // successor to the old "draft the next sprint" action (tas-R0J1AGqs).
-  function groupIntoEpics() {
-    runPrompt(epicPlanPrompt(workspace, tickets, users), {
-      cwd: workspace?.worktree?.path,
-      label: 'Group backlog into epics',
-    });
+  //
+  // Fetches its own slice rather than reusing the `tickets` prop: that prop is
+  // the board's paged store (page 1, 50 rows) narrowed by whatever filters are
+  // active, so handing it over would silently under-scope the plan — Claude
+  // would group a fraction of the backlog and report the job done. Same reason
+  // EpicPanel and the sprint burn strip fetch their own slices.
+  let planBusy = false;
+  async function groupIntoEpics() {
+    if (planBusy) return;
+    planBusy = true;
+    try {
+      const params = new URLSearchParams({ epic: 'none', status: 'backlog', limit: '200' });
+      // `workspace` is null in the Unsorted pseudo-workspace, which is the
+      // `none` sentinel server-side — not "every sprint".
+      params.set('sprint', workspace ? workspace.id : 'none');
+      const res = await fetch(`/api/tickets?${params}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = await res.json();
+      const items: any[] = Array.isArray(j) ? j : (j.items || []);
+      const scoped = items.map(normalizeTicket);
+      if (scoped.length === 0) {
+        showToast('Nothing ungrouped to plan', 'error', 3000);
+        return;
+      }
+      runPrompt(epicPlanPrompt(workspace, scoped, users), {
+        cwd: workspace?.worktree?.path,
+        label: 'Group backlog into epics',
+      });
+    } catch {
+      showToast('Could not load the ungrouped backlog', 'error', 4000);
+    } finally {
+      planBusy = false;
+    }
   }
   function planSprint(sprint: Sprint) {
     runPrompt(sprintBreakdownPrompt(sprint, tickets, users), {
@@ -157,7 +187,7 @@
       {/if}
       <div class="row-actions">
         {#if it.plan}
-          <button class="btn" on:click={groupIntoEpics}>
+          <button class="btn" on:click={groupIntoEpics} disabled={planBusy}>
             {$claudeAvailable ? 'Group with Claude' : 'Copy grouping prompt'}
           </button>
         {/if}

@@ -120,7 +120,14 @@ see the migration note under _Changed_.
   to the sprint commit prompt.
 - **Epic `color` is validated** on every write path (REST, MCP, CLI) —
   it's interpolated into an inline `style`, and an unconstrained string
-  let extra declarations ride along. Hex literals only.
+  let extra declarations ride along. Hex literals only, enforced in
+  `createEpic` / `updateEpic` as well as at each call site, so the
+  invariant travels with the write instead of with six callers.
+- **"Group with Claude" plans the whole backlog, not the visible page.**
+  The triage action handed Claude the board's paged, filtered ticket
+  store, so an active filter or a backlog past the 50-row first page
+  meant Claude grouped a fraction and reported the job done. It now
+  fetches its own workspace-scoped slice of ungrouped backlog.
 - **`/api/ai/plan` drafts an epic, not a sprint.** It selected from
   backlog tickets with no sprint, which is always empty now that a
   sprint frames the workspace. It now buckets a workspace's *ungrouped*
