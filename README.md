@@ -830,6 +830,20 @@ Sprints also get a **"Plan sprint with Claude"** action on `SprintPanel` and
 `TriagePanel` that runs the `sprintBreakdownPrompt` — Claude reads the
 sprint goal, drafts child tickets, and can create them via the MCP tools.
 
+Epics get two actions on `EpicPanel`:
+
+- **"Plan epic with Claude"** (`epicBreakdownPrompt`) — the epic-level twin
+  of the sprint planner. Enabled once the epic has a goal.
+- **"Review epic code with Claude"** (`epicReviewPrompt`) — reviews the
+  epic branch *and* every ticket branch under it in one pass, so problems
+  that only exist between tickets surface: the same helper written twice,
+  one ticket invalidating another's assumption, a convention applied in
+  three places out of four. It runs in the epic worktree, diffs against
+  whatever the epic branch forked from (sprint branch, else the repo
+  default), and posts findings as ticket comments plus one ranked summary.
+  Read-only by construction — the prompt forbids edits, commits and status
+  changes. Enabled once the epic or one of its tickets has a branch.
+
 #### Agent isolation
 
 Research ticket `tas-Ap8VMPuL` evaluated alternatives to git worktrees

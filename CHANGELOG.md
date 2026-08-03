@@ -57,6 +57,16 @@ see the migration note under _Changed_.
   planner: turns the epic's goal into child tickets in waves via
   `dependsOn`, capped at ~12 and forbidden from touching existing
   tickets. Enabled once the epic has a goal.
+- **Review epic code with Claude.** New `EpicPanel` action that reviews
+  the epic branch and every ticket branch under it in one pass, rather
+  than one ticket at a time — the defects it exists to catch are the
+  ones between tickets: the same helper written twice, one ticket
+  invalidating another's assumption, a convention applied in three
+  places out of four. Runs in the epic worktree, diffs against whatever
+  the epic branch forked from, and reports findings as ticket comments
+  plus one ranked summary with a mergeable / not verdict. Read-only by
+  construction: the prompt forbids edits, commits, merges and status
+  changes. Enabled once the epic or one of its tickets has a branch.
 - **Story points in `/api/tickets/summary`.** New `points`
   (`{ total, done }` for the scoped workspace) and `pointsByEpic`
   fields. Sidebar epic rows use them for a done/total burn badge, so
