@@ -15,6 +15,14 @@
   untouched (tas-YerLNB5a).
 
 ### Fixed
+- **A ticket moved between board columns no longer disappears.** Each
+  board column is its own paged store scoped to one status, so a status
+  change is two events: the source column drops the row, and the
+  destination column was ignoring it because the ticket wasn't already
+  in its page. The ticket vanished from the board entirely until a
+  manual refresh. The destination column now injects it, which is safe
+  because page appends dedupe by id — a later page returning the same
+  row replaces it instead of adding a second copy (bug-jJnasGns).
 - **A successful worktree removal no longer prunes other half-removed
   worktrees.** `git worktree prune` is repo-global, so the prune that
   ran after every successful removal swept the admin entry of any
