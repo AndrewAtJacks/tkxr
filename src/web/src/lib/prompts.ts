@@ -700,6 +700,111 @@ export function epicBreakdownPrompt(epic: Epic, existingTickets: Ticket[], users
 }
 
 /**
+ * Review every branch belonging to an epic in one pass.
+ *
+ * Reviewing ticket by ticket misses the defects that only exist between
+ * tickets — two tickets solving the same problem twice, one ticket's change
+ * silently invalidating another's assumption, a convention applied in three of
+ * four places. An epic is the unit that maps to a feature branch, so it is also
+ * the smallest unit where the whole change is visible at once.
+ *
+ * `baseBranch` is what the epic branch forked from (its workspace's sprint
+ * branch, or null to mean the repo default) — passed in because the panel knows
+ * the sprint and this module deliberately has no storage access.
+ */
+export function epicReviewPrompt(
+  epic: Epic,
+  existingTickets: Ticket[],
+  users: User[],
+  baseBranch: string | null,
+): string {
+  const scoped = existingTickets.filter(t => t.epic === epic.id);
+  const withBranches = scoped.filter(t => !!t.worktree);
+  const anchorTicketId = scoped.length > 0 ? scoped[0].id : null;
+
+  const projection = scoped.map(t => {
+    const a = t.assignee ? users.find(u => u.id === t.assignee) : null;
+    const out: any = {
+      id: t.id,
+      type: t.type,
+      title: t.title,
+      status: t.status,
+      assignee: a ? `@${a.username}` : null,
+    };
+    if (t.description && t.description.trim()) out.description = t.description;
+    if (t.worktree) out.branch = t.worktree.branch;
+    return out;
+  });
+
+  const epicBranch = epic.worktree?.branch || null;
+  const base = baseBranch || 'the repo default branch (main)';
+
+  return [
+    `# tkxr — Review the code for epic "${epic.name}" (${epic.id})`,
+    ``,
+    `You are the **reviewer** for this epic. Review only: do not fix anything, do not commit, do not change any ticket's status. Your output is findings.`,
+    ``,
+    `## What to review`,
+    epic.worktree
+      ? `The epic branch \`${epicBranch}\` at \`${epic.worktree.path}\`. \`cd\` there first. Its base is \`${base}\`, so the epic's own work is \`git diff ${baseBranch || '<default-branch>'}...${epicBranch}\`.`
+      : withBranches.length > 0
+        ? `This epic has **no worktree**, so there is no single branch holding its work. Review the ticket branches listed below instead, each against \`${base}\`.`
+        : `This epic has **no worktree**, and none of its tickets have branches either.`,
+    withBranches.length > 0
+      ? `\nTicket branches under this epic — some may not be merged into the epic branch yet, so check each one and say which are outstanding:\n${withBranches.map(t => `- \`${t.worktree!.branch}\` — ${t.id} (${t.status}) ${t.title}`).join('\n')}`
+      : epic.worktree
+        ? `\nNo ticket in this epic has its own branch, so the epic branch is the whole story.`
+        // The panel disables the button in this state, but the export is
+        // callable without it — say plainly that there is nothing here rather
+        // than sending someone to review a branch list that doesn't exist.
+        : `\n**There is nothing to review.** This epic has neither a worktree nor any ticket branches, so no code is associated with it yet. Report that and stop — do not go looking for uncommitted changes in the main checkout.`,
+    ``,
+    `Use \`git log\`, \`git diff\`, and \`git merge-base\` to establish what is actually included before you review it. If a ticket branch has commits the epic branch does not, review it separately and label the finding with that branch — otherwise you will report on code nobody is about to merge, or miss code that is.`,
+    ``,
+    `## What to look for`,
+    `1. **Correctness** — real defects: wrong logic, unhandled errors, races, off-by-one, broken edge cases. Give a concrete failing input or sequence for each, not a category.`,
+    `2. **Ticket fidelity** — for each ticket below, does the code actually do what the ticket describes? Call out anything claimed-but-missing and anything shipped that no ticket asked for.`,
+    `3. **Cross-ticket problems** — the reason this is an epic-wide review and not N ticket reviews. Look for: the same helper written twice, one ticket's change invalidating another's assumption, a convention followed in some places and not others, and dead code left by a later ticket superseding an earlier one.`,
+    `4. **Tests** — what is untested that would have caught a defect you found. Do not ask for coverage for its own sake.`,
+    `5. **Docs** — README / CHANGELOG / agent guide claims that the code no longer supports.`,
+    ``,
+    `Skip style and formatting unless the repo has a stated convention being broken. Report what is wrong, not what is merely different from your taste.`,
+    ``,
+    `## How to report`,
+    `- **Per-ticket findings** → \`add_comment\` on that ticket. Lead with the file and line, then the defect, then a concrete fix. One comment per ticket, not one per finding.`,
+    anchorTicketId
+      ? `- **Summary** → one \`add_comment\` on \`${anchorTicketId}\`: what you reviewed (branches + commit range), the findings ranked most-severe first, and an explicit verdict — is this epic mergeable as it stands?`
+      : `- **Summary** → this epic has no tickets to comment on, so return the summary in your final message instead.`,
+    `- If you found nothing real, say so plainly. Do not pad the list to look thorough.`,
+    ``,
+    `## Guardrails (non-negotiable)`,
+    `- Do NOT edit, stage, commit, merge, rebase, or push anything.`,
+    `- Do NOT call \`update_ticket_status\` — the human decides what a review means for a ticket's state.`,
+    `- Do NOT create or delete tickets. If a finding deserves its own ticket, say so in the summary and let the human file it.`,
+    `- Verify before you report: read the surrounding code, and prefer running the thing over reasoning about it. A confident wrong finding costs more than a missed one.`,
+    ``,
+    `## Epic context`,
+    '```json',
+    JSON.stringify({
+      id: epic.id,
+      name: epic.name,
+      goal: epic.goal || null,
+      status: epic.status,
+      sprint: epic.sprint || null,
+      worktree: epic.worktree ? { path: epic.worktree.path, branch: epic.worktree.branch } : null,
+      baseBranch: baseBranch || null,
+      ticketCount: projection.length,
+      tickets: projection,
+    }, null, 2),
+    '```',
+    ``,
+    `The ticket list above is the panel's own slice and is capped — confirm it with \`get_epic\` (\`{ id: "${epic.id}" }\`) before concluding a branch has no ticket behind it.`,
+    ``,
+    MCP_REMINDER,
+  ].join('\n');
+}
+
+/**
  * Group a workspace's ungrouped backlog into epics.
  *
  * Replaces the old `sprintPlanPrompt`, which drafted a *sprint* out of the

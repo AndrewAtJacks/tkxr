@@ -5,7 +5,7 @@
   import { onTicketEvent } from './ticketEvents';
   import { claudeAvailable } from './settings';
   import { runPrompt } from './claudeRun';
-  import { epicBreakdownPrompt } from './prompts';
+  import { epicBreakdownPrompt, epicReviewPrompt } from './prompts';
   import { copyToClipboard, showToast } from './clipboard';
   import BranchInsights from './BranchInsights.svelte';
   import CopyId from './CopyId.svelte';
@@ -205,6 +205,39 @@
     });
   }
 
+  // ---- Review the whole epic's code ----
+  // Reviewing ticket by ticket can't see between tickets — duplicated helpers,
+  // one ticket invalidating another's assumption, a convention half-applied. An
+  // epic maps to a feature branch, so it's the smallest unit where the whole
+  // change is visible at once.
+  //
+  // Needs something to review: the epic branch, or at least one ticket branch.
+  // With neither there is no diff, only a pile of uncommitted work in the main
+  // checkout, which is not this button's job.
+  $: reviewableBranches = (epic?.worktree ? 1 : 0) + scoped.filter(t => !!t.worktree).length;
+  $: canReview = !!epic && !isCreate && reviewableBranches > 0;
+
+  // The epic branch forked from its workspace's sprint branch when that sprint
+  // has a worktree, else the repo default — the same order the server uses for
+  // insights and the PR base. Passed to the prompt so the reviewer diffs against
+  // what the branch actually came from.
+  $: reviewBase = (() => {
+    // Copy to a local first: `epic` is a reassignable prop, so the null guard
+    // doesn't narrow inside the `find` callback.
+    const sprintId = epic?.sprint;
+    if (!sprintId) return null;
+    const s = sprints.find(sp => sp.id === sprintId);
+    return s?.worktree?.branch || null;
+  })();
+
+  function runReview() {
+    if (!epic || !canReview) return;
+    runPrompt(epicReviewPrompt(epic, scoped, users, reviewBase), {
+      cwd: epic.worktree?.path,
+      label: 'Review ' + epic.name,
+    });
+  }
+
   async function deleteEpic() {
     if (!epic) return;
     // Deleting never touches the worktree — same rule as sprint completion
@@ -357,6 +390,24 @@
       <button class="orch-btn" on:click={runPlan} disabled={!canPlan}>
         <Sparkles size={14} color="#fff" />
         <span>{$claudeAvailable ? 'Plan with Claude' : 'Copy plan prompt'}</span>
+      </button>
+    </div>
+
+    <div class="orch-card">
+      <div class="orch-head">
+        <Sparkles size={14} color="var(--ai)" />
+        <span>Review epic code with Claude</span>
+      </div>
+      <div class="orch-hint">
+        {#if canReview}
+          Reviews {reviewableBranches === 1 ? 'the one branch' : `all ${reviewableBranches} branches`} in this epic together, so cross-ticket problems show up — duplicated work, one ticket breaking another's assumption, a convention half-applied. Findings land as comments. Guardrails: reads only — no edits, no commits, no status changes.
+        {:else}
+          Nothing to review yet — create a worktree for this epic or one of its tickets first.
+        {/if}
+      </div>
+      <button class="orch-btn" on:click={runReview} disabled={!canReview}>
+        <Sparkles size={14} color="#fff" />
+        <span>{$claudeAvailable ? 'Review with Claude' : 'Copy review prompt'}</span>
       </button>
     </div>
   {/if}
