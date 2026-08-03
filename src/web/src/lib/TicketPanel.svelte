@@ -26,6 +26,14 @@
   export let defaultSprint: string | null = null;
   export let defaultEpic: string | null = null;
   export let defaultAssignee: string | null = null;
+  /** Seeded from the toolbar's type chip so a new ticket isn't born filtered out. */
+  export let defaultType: 'task' | 'bug' = 'task';
+  /**
+   * Whether an unfiltered create may fall back to the operator identity. False
+   * while the board is scoped to unassigned tickets — self-assigning there
+   * hides the ticket the moment it's created (bug-C7mpZAvb).
+   */
+  export let selfAssign = true;
 
   const dispatch = createEventDispatcher();
 
@@ -37,12 +45,12 @@
   let draft: Partial<Ticket> = ticket && !isCreate
     ? { ...ticket }
     : {
-        type: 'task',
+        type: defaultType,
         title: '',
         description: '',
         priority: 'medium',
         status: 'backlog',
-        assignee: defaultAssignee || $currentUserId || null,
+        assignee: defaultAssignee || (selfAssign ? $currentUserId : null) || null,
         sprint: defaultSprint || null,
         epic: defaultEpic || null,
         estimate: 1,
@@ -342,6 +350,10 @@
           body: JSON.stringify({ status: draft.status }),
         });
       }
+      // Hand the created row up so the board can widen any filter that would
+      // otherwise hide it (bug-C7mpZAvb). Fires before `reload` so the filter
+      // change and the refetch collapse into one round-trip.
+      dispatch('created', { ...created, status: draft.status || created.status });
       dispatch('reload');
       dispatch('close');
     } catch { /* noop */ }

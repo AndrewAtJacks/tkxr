@@ -203,6 +203,9 @@
       summary?.byAssignee ? (summary.byAssignee[u.id] || 0) : tickets.filter(t => t.assignee === u.id).length,
     ]),
   );
+  $: unassignedCount = summary?.byAssignee
+    ? (summary.byAssignee.none || 0)
+    : tickets.filter(t => !t.assignee).length;
 
   function onCliToggle(e: Event) {
     const t = e.currentTarget as HTMLInputElement;
@@ -221,6 +224,7 @@
   }
   function newEpic() { dispatch('newEpic'); }
   function selectAllUsers() { dispatch('user', 'all'); }
+  function selectUnassigned() { dispatch('user', 'none'); }
   function openUserPanel(id: string) { dispatch('manageUser', id); }
   function toggleUserFilter(id: string) {
     dispatch('user', activeUser === id ? 'all' : id);
@@ -240,7 +244,7 @@
     } catch (e) { /* noop */ }
   }
 
-  function onDrop(kind: 'clear-epic' | 'epic' | 'all-user' | 'user', id?: string) {
+  function onDrop(kind: 'clear-epic' | 'epic' | 'clear-user' | 'user', id?: string) {
     return async (e: DragEvent) => {
       e.preventDefault();
       dragOverKey = null;
@@ -249,7 +253,7 @@
       if (!tid) return;
       if (kind === 'clear-epic') await persistTicket(tid, { epic: null });
       else if (kind === 'epic') await persistTicket(tid, { epic: id });
-      else if (kind === 'all-user') await persistTicket(tid, { assignee: null });
+      else if (kind === 'clear-user') await persistTicket(tid, { assignee: null });
       else if (kind === 'user') await persistTicket(tid, { assignee: id });
     };
   }
@@ -417,12 +421,15 @@
     <button class="icon-btn" title="Add person" on:click={newUser}><Plus size={12} /></button>
   </div>
   <div class="section-list" style="flex:1;padding-bottom:8px">
+    <!--
+      No drop target on "Everyone" — dropping a ticket on it cleared the
+      assignee, which never matched the label. Clearing lives on the
+      "Unassigned" row below, which is what it actually does (mirrors the
+      epic section's clear-target move in tas-nuu2zscR).
+    -->
     <button
       style={rowStyle(activeUser === 'all' && !panel, 'all-user')}
       on:click={selectAllUsers}
-      on:dragover={onDragOver('all-user')}
-      on:dragleave={onDragLeave}
-      on:drop={onDrop('all-user')}
     >
       <span class="avatar" style="background:var(--chip);color:var(--muted);font-weight:600">∗</span>
       <span class="row-label">Everyone</span>
@@ -457,6 +464,24 @@
         </button>
       </div>
     {/each}
+    <!--
+      TriagePanel's unassigned finding sets this filter, but until now nothing
+      rendered for it: "Everyone" went un-highlighted, so the board looked
+      unfiltered while silently hiding every assigned ticket — including each
+      one the create panel had just self-assigned (bug-C7mpZAvb). Always
+      rendered, like "No epic": it's also the drop target for unassigning.
+    -->
+    <button
+      style={rowStyle(activeUser === 'none' && !panel, 'none-user')}
+      on:click={selectUnassigned}
+      on:dragover={onDragOver('none-user')}
+      on:dragleave={onDragLeave}
+      on:drop={onDrop('clear-user')}
+    >
+      <span class="avatar" style="background:var(--surface-3);color:var(--muted);font-weight:600">?</span>
+      <span class="row-label">Unassigned</span>
+      <span class="mono count">{unassignedCount}</span>
+    </button>
   </div>
 
   <div class="footer" bind:this={footerEl}>

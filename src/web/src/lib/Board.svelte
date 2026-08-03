@@ -166,10 +166,20 @@
     const title = quickAddValue.trim();
     if (!title) { quickAddCol = null; return; }
     try {
+      // Inherit the view the card was typed into. Quick-add used to post only
+      // `{type, title, status}`, so a card added inside a sprint workspace was
+      // born with no sprint at all and never appeared in the column it was
+      // typed into — the board is sprint-scoped (bug-C7mpZAvb). Same reasoning
+      // for epic/assignee/type: `none` means "the unset bucket", so it stays
+      // unset rather than being sent as a literal id.
+      const body: Record<string, unknown> = { type: query.type || 'task', title, status };
+      if (query.sprint && query.sprint !== 'none') body.sprint = query.sprint;
+      if (query.epic && query.epic !== 'none') body.epic = query.epic;
+      if (query.assignee && query.assignee !== 'none') body.assignee = query.assignee;
       const res = await fetch('/api/tickets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'task', title, status }),
+        body: JSON.stringify(body),
       });
       if (res.ok) {
         const created = await res.json();
@@ -186,6 +196,10 @@
         // server-side default transitioned through it.
         refreshColumn(status);
         if (status !== 'backlog') refreshColumn('backlog');
+        // Everything above is inherited, so the only filter left that can hide
+        // the card is the search box. Let the parent widen it rather than drop
+        // the card the user just typed.
+        dispatch('created', { ...created, status });
         // Let parent refresh sidebar/comment counts etc.
         dispatch('reload');
       }
