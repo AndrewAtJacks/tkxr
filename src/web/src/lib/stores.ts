@@ -58,6 +58,9 @@ export interface Epic {
   color?: string;
   goal?: string;
   sprint?: string | null;
+  // An epic maps to a feature branch: ticket worktrees base off this branch
+  // when it exists, and it's what opens a PR (tas-IK2HcQWo).
+  worktree?: TicketWorktree | null;
   createdAt: string;
   updatedAt: string;
 }

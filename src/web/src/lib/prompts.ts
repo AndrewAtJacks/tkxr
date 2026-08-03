@@ -1,4 +1,4 @@
-import type { Ticket, User, Sprint } from './stores';
+import type { Epic, Ticket, User, Sprint } from './stores';
 
 const MCP_REMINDER = `Use the tkxr MCP tools if attached (agent_guide, get_ticket, list_tickets, search_tickets, edit_ticket, update_ticket_status, assign_ticket, add_comment, set_ticket_sprint). If a change is warranted, apply it via the MCP tools so the web UI live-refreshes.`;
 
@@ -303,7 +303,7 @@ export function commitSprintPrompt(sprint: Sprint, tickets: Ticket[], users: Use
     `3. Decide the shape of the work:`,
     `   - **Integration / cross-cutting changes not tied to a single ticket** → one commit with \`<type>(<scope>): <subject> (${id})\` — tag the sprint id so it's greppable.`,
     `   - **Changes that clearly belong to one ticket in this sprint** → tag that ticket id instead of the sprint id.`,
-    `   - **Unmerged ticket branches in \`review\`** → merge each one into the sprint branch with \`git merge --no-ff <ticket-branch> -m "chore(merge): <ticket-id> <short title>"\`. On conflict: \`git merge --abort\`, \`add_comment\` on the ticket describing the conflict, and stop — do NOT force.`,
+    `   - **Unmerged ticket branches in \`review\`** → merge each one into the sprint branch with \`git merge --no-ff <ticket-branch> -m "chore(merge): <ticket-id> <short title>"\`. A ticket based on an epic branch drags that whole epic branch in, so merge the epic branch itself instead when its tickets are all in \`review\`. On conflict: \`git merge --abort\`, \`add_comment\` on the ticket describing the conflict, and stop — do NOT force.`,
     `4. Stage the correct files — prefer \`git add <path>...\` over \`git add -A\`. Skip unrelated cruft (editor swap files, .env, node_modules diff noise). Leave unrelated changes unstaged and mention it in the summary comment.`,
     `5. Craft each commit message per the convention below. Subject imperative, ≤72 chars including \`<type>(<scope>): \` and the trailing \`(<id>)\` where \`<id>\` is either \`${id}\` or a ticket id from this sprint.`,
     `6. Body (optional): one short paragraph explaining WHY, sourced from the sprint goal or ticket description — not a diff summary. Wrap at ~72 cols. No "Generated with…" trailer.`,
@@ -466,11 +466,11 @@ export function orchestrateSprintPrompt(sprint: Sprint, tickets: Ticket[], users
     `Work on tkxr ticket <TICKET_ID>.`,
     ``,
     `1. Call \`get_ticket\` first. If the response has a non-empty \`blockedBy\` list, STOP: call \`update_ticket_status\` with \`status: "blocked"\`, \`add_comment\` naming the deps, and return control. The orchestrator will re-fan you when unblocked.`,
-    `2. Otherwise: call \`create_worktree\` with \`{ ticketId: "<TICKET_ID>" }\` — base defaults to the sprint branch (\`${wtBranch}\`) automatically.`,
+    `2. Otherwise: call \`create_worktree\` with \`{ ticketId: "<TICKET_ID>" }\`. The base is picked for you: the ticket's **epic** branch if that epic has a worktree, otherwise this sprint branch (\`${wtBranch}\`). The response tells you which. Do not pass \`base\` yourself.`,
     `3. cd into the returned path. Do NOT touch any other directory.`,
     `4. Re-read the ticket + comments if needed. Look at the actual repo.`,
     `5. Call \`update_ticket_status\` with \`{ id: "<TICKET_ID>", status: "progress" }\`.`,
-    `6. Do the work. Commit on your ticket branch using **Conventional Commits** — subject \`<type>(<scope>): <imperative> (<TICKET_ID>)\`. Do NOT merge, rebase against the sprint branch, or push.`,
+    `6. Do the work. Commit on your ticket branch using **Conventional Commits** — subject \`<type>(<scope>): <imperative> (<TICKET_ID>)\`. Do NOT merge, rebase onto your base branch, or push.`,
     `7. When done: call \`update_ticket_status\` with \`status: "review"\`, then \`add_comment\` summarising what changed and how to verify.`,
     `8. Return control to the orchestrator with the ticket id + branch name.`,
     '```',
@@ -482,8 +482,9 @@ export function orchestrateSprintPrompt(sprint: Sprint, tickets: Ticket[], users
     ``,
     `1. Verify with \`get_ticket\` that status is \`review\` and the ticket branch is set. Also check \`blockedBy\` in the response — sanity check that nothing regressed.`,
     `2. From the sprint worktree, run \`git merge --no-ff <ticket-branch> -m "chore(merge): <ticket-id> <ticket-title>"\` (Conventional Commits — see the convention block below).`,
-    `3. **On merge conflict**: \`git merge --abort\`. Call \`add_comment\` on the ticket describing the conflicting paths + which other ticket(s) collided with it. Set status back to \`progress\` and re-fan a sub-agent to resolve — instruct the sub-agent to pull the latest sprint branch into its worktree first (\`git pull --rebase origin ${wtBranch}\` or \`git rebase ${wtBranch}\`), OR escalate to the human. Do not force anything.`,
-    `4. **On clean merge**: \`update_ticket_status\` to \`done\` (this auto-removes the ticket worktree if clean). If you kept the ticket branch and want to prune it: \`git branch -d <ticket-branch>\`.`,
+    `   - **If the ticket was based on an epic branch**, that merge brings the whole epic branch along, not just this ticket's commits. Prefer merging the epic branch once its tickets are all in \`review\` over merging its tickets one at a time.`,
+    `3. **On merge conflict**: \`git merge --abort\`. Call \`add_comment\` on the ticket describing the conflicting paths + which other ticket(s) collided with it. Set status back to \`progress\` and re-fan a sub-agent to resolve — instruct the sub-agent to rebase onto the branch it was originally based on (its epic branch, or \`${wtBranch}\`), OR escalate to the human. Do not force anything.`,
+    `4. **On clean merge**: \`update_ticket_status\` to \`done\`. That is a status change only — it does NOT remove the worktree or touch the branch. Call \`remove_worktree\` with \`{ ticketId: "<TICKET_ID>" }\` when you actually want the checkout gone; it keeps any branch holding unmerged commits and reports it as \`branchKept\`.`,
     `5. **After each done**: re-scan blocked tickets in this sprint. For any whose \`dependsOn\` are now all \`done\`, transition them back to \`backlog\` + \`add_comment\` noting the unblock, then fan out a sub-agent for it.`,
     ``,
     `## Finish`,
@@ -604,9 +605,112 @@ export function sprintBreakdownPrompt(sprint: Sprint, existingTickets: Ticket[],
   ].join('\n');
 }
 
-export function sprintPlanPrompt(sprints: Sprint[], tickets: Ticket[], users: User[]): string {
-  const backlog = tickets.filter(t => t.status === 'backlog' && !t.sprint);
-  const projection = backlog.map(t => {
+/**
+ * Break an epic's goal into child tickets — the epic-level twin of
+ * `sprintBreakdownPrompt`. A sprint frames the workspace now, so the unit that
+ * actually has a goal worth decomposing is usually the epic (tas-HnASryio).
+ */
+export function epicBreakdownPrompt(epic: Epic, existingTickets: Ticket[], users: User[]): string {
+  const scoped = existingTickets.filter(t => t.epic === epic.id);
+  const scopedProjection = scoped.map(t => {
+    const a = t.assignee ? users.find(u => u.id === t.assignee) : null;
+    const out: any = {
+      id: t.id,
+      type: t.type,
+      title: t.title,
+      status: t.status,
+      priority: t.priority || null,
+      estimate: t.estimate ?? null,
+      assignee: a ? `@${a.username}` : null,
+    };
+    if (t.labels && t.labels.length > 0) out.labels = t.labels;
+    if (t.description && t.description.trim()) out.description = t.description;
+    if (t.dependsOn && t.dependsOn.length > 0) out.dependsOn = t.dependsOn;
+    return out;
+  });
+  const userProjection = users.map(u => ({ id: u.id, username: `@${u.username}`, displayName: u.displayName }));
+
+  const anchorTicketId = scoped.length > 0 ? scoped[0].id : null;
+  const wtPath = epic.worktree?.path;
+
+  return [
+    `# tkxr — Plan epic "${epic.name}" (${epic.id})`,
+    ``,
+    `You are the **epic planner**. Your job is to turn this epic's goal into a concrete set of child tickets — no code, no status flips on existing work. Just research, then create tickets.`,
+    ``,
+    wtPath
+      ? `The epic has a worktree at \`${wtPath}\`. \`cd\` there so any repo exploration reflects the epic branch.`
+      : `The epic has no worktree yet — that's fine. Run your repo research against the current checkout.`,
+    ``,
+    `## Epic goal`,
+    epic.goal ? epic.goal : `(no goal set — STOP and ask the user for one before doing anything.)`,
+    ``,
+    `## Suggested flow`,
+    `1. Re-read the goal above. If it's ambiguous, one-line-summarise your interpretation and ASK the user to confirm before creating anything. Do not guess silently.`,
+    `2. Read every ticket already in the epic (see JSON below) so you don't duplicate scope.`,
+    `3. Explore the repo with your own tools — grep, read files, check package.json / docs / relevant modules. Ground the breakdown in what actually exists.`,
+    `4. Design the breakdown:`,
+    `   - Aim for the smallest set of tickets that fully covers the goal.`,
+    `   - **Hard cap: 12 new tickets.** If you're tempted to go past that, stop and ask the user how to scope down.`,
+    `   - Each ticket should be independently reviewable (one branch, one merge).`,
+    `   - Split into **waves** using \`dependsOn\`: Wave 1 = no deps, Wave 2 = depends only on Wave 1, etc.`,
+    `5. For each proposed ticket, call \`create_ticket\` (MCP) exactly once with:`,
+    `   - \`title\`: short, imperative.`,
+    `   - \`description\`: enough context for another agent to pick it up cold — reference specific files/functions when possible.`,
+    `   - \`type\`: \`task\` (default) or \`bug\` if you're capturing a defect uncovered during research.`,
+    `   - \`epic\`: \`"${epic.id}"\` — always, so it lands in this epic.`,
+    epic.sprint
+      ? `   - \`sprint\`: \`"${epic.sprint}"\` — the epic's workspace. The board is sprint-scoped, so a ticket without it won't appear alongside the epic.`
+      : `   - \`sprint\`: leave unset — this epic belongs to no sprint, so its tickets live in the Unsorted workspace.`,
+    `   - \`estimate\`: story points (1 = trivial, 2 = half day, 3 = day, 5 = multi-day, 8 = week-ish).`,
+    `   - \`priority\`: \`low\` | \`medium\` | \`high\` | \`critical\`.`,
+    `   - \`dependsOn\`: array of the ids of other **new tickets you just created** that must land first.`,
+    `   - Do NOT set \`assignee\` unless a user obviously owns the area — leave it null for the human to route.`,
+    `6. Post ONE summary comment on ${anchorTicketId ? `the epic's first ticket (\`${anchorTicketId}\`)` : `a dedicated "plan" ticket you create first (title: "Epic plan: ${epic.name}", type: task, priority: medium)`} via \`add_comment\`. List each wave and its ticket ids, give a one-line reasoning for the ordering, and call out any assumptions you made about the goal.`,
+    ``,
+    `## Guardrails (non-negotiable)`,
+    `- Do NOT edit or delete any existing ticket. No \`edit_ticket\`, no \`delete_ticket\`.`,
+    `- Do NOT call \`update_ticket_status\` on anything — new or existing. New tickets start in \`backlog\` by default; that's correct.`,
+    `- Do NOT create the epic or change epic metadata. It already exists.`,
+    `- Do NOT assign yourself or others; leave routing to the human.`,
+    `- If the goal is ambiguous, contradictory, or already fully covered by existing tickets, STOP and ask before creating anything.`,
+    `- Cap: ~12 new tickets. Fewer is better.`,
+    ``,
+    `## Epic context`,
+    '```json',
+    JSON.stringify({
+      id: epic.id,
+      name: epic.name,
+      goal: epic.goal || null,
+      status: epic.status,
+      sprint: epic.sprint || null,
+      worktree: epic.worktree ? { path: epic.worktree.path, branch: epic.worktree.branch } : null,
+      existingTicketCount: scopedProjection.length,
+      existingTickets: scopedProjection,
+    }, null, 2),
+    '```',
+    ``,
+    `## Users (for reference — do NOT auto-assign)`,
+    '```json',
+    JSON.stringify(userProjection, null, 2),
+    '```',
+    ``,
+    MCP_REMINDER,
+  ].join('\n');
+}
+
+/**
+ * Group a workspace's ungrouped backlog into epics.
+ *
+ * Replaces the old `sprintPlanPrompt`, which drafted a *sprint* out of the
+ * sprintless backlog. That framing died with tas-hr2pCGjr: a sprint is the
+ * workspace now, so every ticket on the board already has one and the prompt
+ * had nothing to select from. Epics are the in-workspace grouping, so the
+ * equivalent nudge is "these backlog tickets have no epic" (tas-R0J1AGqs).
+ */
+export function epicPlanPrompt(sprint: Sprint | null, tickets: Ticket[], users: User[]): string {
+  const ungrouped = tickets.filter(t => t.status === 'backlog' && !t.epic);
+  const projection = ungrouped.map(t => {
     const a = t.assignee ? users.find(u => u.id === t.assignee) : null;
     return {
       id: t.id,
@@ -615,21 +719,35 @@ export function sprintPlanPrompt(sprints: Sprint[], tickets: Ticket[], users: Us
       priority: t.priority || null,
       estimate: t.estimate ?? null,
       assignee: a ? `@${a.username}` : null,
+      description: t.description && t.description.trim() ? t.description : null,
     };
   });
-  const totalPts = backlog.reduce((s, t) => s + (t.estimate || 0), 0);
+  const totalPts = ungrouped.reduce((s, t) => s + (t.estimate || 0), 0);
+  const scopeLine = sprint
+    ? `Workspace: sprint "${sprint.name}" (\`${sprint.id}\`).`
+    : `Workspace: Unsorted — these tickets belong to no sprint.`;
+
   return [
-    `# tkxr — Draft next sprint`,
+    `# tkxr — Group the backlog into epics`,
     ``,
-    `Backlog: ${backlog.length} tickets, ${totalPts} pts total.`,
+    scopeLine,
+    `Ungrouped backlog: ${ungrouped.length} tickets, ${totalPts} pts total.`,
     ``,
-    `Please:`,
-    `1. Create a planning sprint via \`create_sprint\` with an inferred name + goal.`,
-    `2. Select tickets that balance to a reasonable capacity (aim ~half the backlog pts, min 8).`,
-    `3. For each selection, use \`set_ticket_sprint\` to attach it.`,
-    `4. Prefer high-priority + short-effort tickets; keep bugs before tasks at equal priority.`,
+    `These tickets sit in the workspace with no epic, so the board reads as a flat list instead of work streams. Your job is to bucket them — no code, no status changes.`,
     ``,
-    `## Backlog`,
+    `## Suggested flow`,
+    `1. Read the titles + descriptions below and look for genuine themes (feature areas, subsystems, initiatives). Explore the repo if a title is ambiguous.`,
+    `2. Create an epic per theme via \`create_epic\`: \`name\` (short), \`goal\` (one line)${sprint ? `, \`sprint: "${sprint.id}"\` so it lands in this workspace` : ''}.`,
+    `3. Attach each ticket with \`set_ticket_epic\`.`,
+    `4. Leave genuinely one-off tickets ungrouped — a one-ticket epic is noise.`,
+    ``,
+    `## Guardrails`,
+    `- **Cap: 5 new epics.** Fewer is better; if you need more, stop and ask.`,
+    `- Do NOT change ticket status, priority, estimate, or assignee.`,
+    `- Do NOT create or delete tickets.`,
+    `- Reuse an existing epic if one already fits — check \`list_epics\` first.`,
+    ``,
+    `## Ungrouped backlog`,
     '```json',
     JSON.stringify(projection, null, 2),
     '```',

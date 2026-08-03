@@ -4,15 +4,31 @@
 **Sprint:** `spr-C5Rl8Kim` (Implement Claude CLI)
 **Status:** Research — no code changes.
 
+> **Update (tas-IK2HcQWo).** This is a point-in-time evaluation of *alternatives to*
+> worktrees, and its conclusion — keep them — still stands. The description of the
+> baseline has moved on since it was written: there is a third worktree level (epics),
+> and removal no longer discards work. Those specifics are corrected inline below; the
+> scoring and the recommendation are left as originally written. `README.md` is the
+> live reference for how worktrees behave today.
+
 ## Context
 
 Today `tkxr` isolates concurrent agent work with `git worktree`. `create_worktree` /
-`create_sprint_worktree` in `src/core/worktree.ts` shell out to `git worktree add`,
-picking a per-ticket path (`<repo-parent>/<repo>-worktrees/<ticketId>`) and a per-ticket
-branch (`tkxr/<ticketId>`), with sprint-level orchestration in `orchestrateSprintPrompt`
-(`src/web/src/lib/prompts.ts`). The sprint orchestrator agent owns the sprint worktree
-and fans out sub-agents; each sub-agent gets its own worktree + branch and merges back
-into the sprint branch.
+`create_epic_worktree` / `create_sprint_worktree` in `src/core/worktree.ts` shell out to
+`git worktree add`, picking a per-ticket path (`<repo-parent>/<repo>-worktrees/<ticketId>`)
+and a per-ticket branch (`tkxr/<ticketId>`), with sprint-level orchestration in
+`orchestrateSprintPrompt` (`src/web/src/lib/prompts.ts`). The sprint orchestrator agent
+owns the sprint worktree and fans out sub-agents; each sub-agent gets its own worktree +
+branch and merges back into the sprint branch.
+
+Since this was written the hierarchy gained a middle level. An **epic** is the unit that
+maps to a feature branch (`tkxr/epic/<epicId>` at `<repo>-worktrees/epics/<epicId>`), and
+a ticket branch bases on its epic branch when that epic has a worktree, falling back to
+the sprint branch and then `HEAD`. A sprint now frames the whole workspace rather than one
+unit of work, so it is the epic branch, not the sprint branch, that most ticket work hangs
+off. None of this changes the isolation primitive being evaluated here — it is still one
+`git worktree add` per unit of parallel work — it only adds one more level that can own
+one.
 
 The complaint from the ticket is that worktrees are "heavyweight" — full checkout per
 ticket, disk cost, git plumbing, and cleanup edge cases (stale entries, force-remove on
@@ -52,8 +68,12 @@ Full separate checkout per ticket, sharing the `.git` object store via a lightwe
   on Windows, macOS, Linux. No admin/root, no filesystem prerequisites.
 - **Cleanup: 3** — `git worktree remove` + `git worktree prune` covers most cases, but
   edge cases exist: uncommitted changes need `--force`, deleted-out-of-band paths need
-  prune, branch deletion is best-effort in the current code. The existing MCP surface
-  handles this reasonably.
+  prune. The existing MCP surface handles this reasonably.
+  _(Since scored, per bug-MtPFb7dg: branch deletion is no longer best-effort. Removal
+  uses `git branch -d`, so a branch with unmerged commits is kept and reported as
+  `branchKept` rather than discarded, and a partial `git worktree remove` failure no
+  longer gets finalised by a prune. Cleanup is safer than this 3 suggests, though the
+  manual-per-entity friction the score reflects is unchanged.)_
 - **Resource cost: 2** — full working-tree copy per ticket. On this repo that's ~200 MB
   including `node_modules` if the user copies them, though the shared `.git` object
   store keeps history from being duplicated. Real cost is the working tree files
@@ -228,8 +248,11 @@ follow-up sprint:
    `create_worktree({ ..., sparse: ["src/", "package.json"] })`. Cross-platform, git
    native, minimal MCP change.
 5. **Configurable base and cleanup policy** already largely in place — document the
-   `TKXR_WORKTREE_ROOT` env var + auto-cleanup on `update_ticket_status → done` more
-   prominently.
+   `TKXR_WORKTREE_ROOT` env var more prominently.
+   _(The auto-cleanup on `update_ticket_status → done` this originally pointed at was
+   removed in bug-MtPFb7dg: it deleted the checkout a reviewer was still standing in,
+   and destroyed unmerged branches. No status transition touches a worktree now, on any
+   entity — removal is explicit. That makes item 1 above more valuable, not less.)_
 
 ### Small hybrid escape hatch (optional)
 
@@ -247,8 +270,8 @@ users who don't want Docker Desktop.
 
 ### MCP surface change if adopted
 
-Minimal. `create_worktree` and `create_sprint_worktree` both gain optional
-`sparse?: string[]` and (later) `isolation?: "worktree" | "container"` fields.
+Minimal. `create_worktree`, `create_epic_worktree` and `create_sprint_worktree` each gain
+optional `sparse?: string[]` and (later) `isolation?: "worktree" | "container"` fields.
 No breaking change to existing consumers.
 
 ## Not-recommended paths

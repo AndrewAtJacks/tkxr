@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
-import type { Epic, Sprint, Ticket, TicketStatus, User } from '../../core/types.js';
+import type { Epic, Sprint, Ticket, TicketStatus, TicketWorktree, User } from '../../core/types.js';
 
 interface ShowArgs extends minimist.ParsedArgs {
   _: string[];
@@ -117,6 +117,8 @@ async function renderTicket(storage: any, ticket: Ticket): Promise<void> {
     console.log(`${chalk.blue('Labels:')}    ${ticket.labels.join(', ')}`);
   }
 
+  renderWorktree(ticket.worktree);
+
   if (ticket.description) {
     console.log();
     console.log(chalk.blue('Description:'));
@@ -127,6 +129,18 @@ async function renderTicket(storage: any, ticket: Ticket): Promise<void> {
   console.log(chalk.dim(`Created: ${new Date(ticket.createdAt).toLocaleString()}`));
   console.log(chalk.dim(`Updated: ${new Date(ticket.updatedAt).toLocaleString()}`));
   console.log();
+}
+
+/**
+ * Tickets, epics and sprints all carry a worktree now (tas-IK2HcQWo), and it's
+ * the piece of state you most often need from `show` — where the branch lives,
+ * and what to `cd` into. Nothing removes a worktree implicitly, so a stale-
+ * looking entry here is a real directory on disk, not a leftover flag.
+ */
+function renderWorktree(wt: TicketWorktree | null | undefined): void {
+  if (!wt) return;
+  console.log(`${chalk.blue('Worktree:')}  ${wt.path}`);
+  console.log(`${chalk.blue('Branch:')}    ${wt.branch}`);
 }
 
 function renderSprint(sprint: Sprint): void {
@@ -145,6 +159,7 @@ function renderSprint(sprint: Sprint): void {
   if (sprint.goal) console.log(`${chalk.blue('Goal:')}      ${sprint.goal}`);
   if (sprint.startDate) console.log(`${chalk.blue('Start:')}     ${new Date(sprint.startDate).toLocaleDateString()}`);
   if (sprint.endDate) console.log(`${chalk.blue('End:')}       ${new Date(sprint.endDate).toLocaleDateString()}`);
+  renderWorktree(sprint.worktree);
   if (sprint.description) {
     console.log();
     console.log(chalk.blue('Description:'));
@@ -179,6 +194,7 @@ async function renderEpic(storage: any, epic: Epic): Promise<void> {
   console.log(`${chalk.blue('Sprint:')}    ${epic.sprint ? (sprint?.name || epic.sprint) : chalk.dim('none')}`);
   if (epic.goal) console.log(`${chalk.blue('Goal:')}      ${epic.goal}`);
   console.log(`${chalk.blue('Tickets:')}   ${scoped.length} (${done} done, ${points} pts)`);
+  renderWorktree(epic.worktree);
   if (epic.description) {
     console.log();
     console.log(chalk.blue('Description:'));

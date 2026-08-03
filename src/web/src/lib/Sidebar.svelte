@@ -63,6 +63,10 @@
     byEpic?: Record<string, number>;
     /** Ticket count per assignee id within the scoped workspace; `none` = unassigned. */
     byAssignee?: Record<string, number>;
+    /** Story points across the scoped workspace. */
+    points?: { total: number; done: number };
+    /** Story points per epic id within the scoped workspace; `none` = no epic. */
+    pointsByEpic?: Record<string, { total: number; done: number }>;
   }
   let summary: TicketSummary | null = null;
   let summaryAbort: AbortController | null = null;
@@ -179,6 +183,13 @@
   $: noEpicCount = summary?.byEpic
     ? (summary.byEpic.none || 0)
     : tickets.filter(t => !t.epic).length;
+  // done/total story points per epic — the sprint strip's burn numbers, one
+  // level down (tas-HnASryio). Server-computed, so unlike the `tickets`
+  // fallbacks these stay correct when only page 1 is loaded. No fallback: a
+  // burn figure derived from one page is worse than no burn figure.
+  $: epicBurn = new Map(
+    epics.map(e => [e.id, summary?.pointsByEpic?.[e.id] || null]),
+  );
   $: userCounts = new Map(
     users.map(u => [
       u.id,
@@ -222,14 +233,14 @@
     } catch (e) { /* noop */ }
   }
 
-  function onDrop(kind: 'all-epic' | 'epic' | 'all-user' | 'user', id?: string) {
+  function onDrop(kind: 'clear-epic' | 'epic' | 'all-user' | 'user', id?: string) {
     return async (e: DragEvent) => {
       e.preventDefault();
       dragOverKey = null;
       const tid = $draggingTicketId;
       draggingTicketId.set(null);
       if (!tid) return;
-      if (kind === 'all-epic') await persistTicket(tid, { epic: null });
+      if (kind === 'clear-epic') await persistTicket(tid, { epic: null });
       else if (kind === 'epic') await persistTicket(tid, { epic: id });
       else if (kind === 'all-user') await persistTicket(tid, { assignee: null });
       else if (kind === 'user') await persistTicket(tid, { assignee: id });
@@ -306,18 +317,21 @@
     <button class="icon-btn" title="New epic" on:click={newEpic}><Plus size={12} /></button>
   </div>
   <div class="section-list" style="max-height:220px">
+    <!--
+      No drop handler here: "All tickets" is a view, not a bucket, so dropping
+      on it never had a meaning matching its label. The clear-epic target lives
+      on the "No epic" row below, which is what it actually does (tas-nuu2zscR).
+    -->
     <button
       style={rowStyle(activeEpic === 'all' && !panel, 'all-epic')}
       on:click={selectAllEpics}
-      on:dragover={onDragOver('all-epic')}
-      on:dragleave={onDragLeave}
-      on:drop={onDrop('all-epic')}
     >
       <span class="dot" style="background:var(--faint)"></span>
       <span class="row-label">All tickets</span>
       <span class="mono count">{totalCount}</span>
     </button>
     {#each epics as ep (ep.id)}
+      {@const burn = epicBurn.get(ep.id) || null}
       <div
         class="row"
         role="button"
@@ -336,7 +350,15 @@
           <span class="dot" style="background:{ep.color || 'var(--faint)'}"></span>
           <span class="row-label">{ep.name}</span>
         </button>
-        <span class="mono count">{epicCounts.get(ep.id) || 0}</span>
+        {#if burn}
+          <span
+            class="mono burn"
+            class:complete={burn.total > 0 && burn.done === burn.total}
+            title="{burn.done} of {burn.total} story points done"
+          >{burn.done}/{burn.total}</span>
+        {:else}
+          <span class="mono count">{epicCounts.get(ep.id) || 0}</span>
+        {/if}
         <button
           class="filter-btn"
           class:active={activeEpic === ep.id}
@@ -347,10 +369,18 @@
         </button>
       </div>
     {/each}
-    {#if noEpicCount > 0 || activeEpic === 'none'}
+    <!--
+      Also rendered whenever any epic exists, even at zero count: it's the drop
+      target for clearing a ticket's epic, so hiding it would leave drag-to-
+      ungroup with nowhere to land.
+    -->
+    {#if noEpicCount > 0 || activeEpic === 'none' || epics.length > 0}
       <button
         style={rowStyle(activeEpic === 'none' && !panel, 'none-epic')}
         on:click={selectNoEpic}
+        on:dragover={onDragOver('none-epic')}
+        on:dragleave={onDragLeave}
+        on:drop={onDrop('clear-epic')}
       >
         <span class="dot" style="background:var(--surface-3)"></span>
         <span class="row-label">No epic</span>
@@ -715,6 +745,14 @@
     color: var(--faint);
     padding: 0 6px;
   }
+  .burn {
+    font-family: 'IBM Plex Mono';
+    font-size: 10px;
+    color: var(--muted);
+    padding: 0 6px;
+    white-space: nowrap;
+  }
+  .burn.complete { color: #46c17f; }
   .filter-btn {
     width: 22px; height: 22px;
     display: flex; align-items: center; justify-content: center;

@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
+import { COLOR_ERROR, isValidColor } from '../../core/color.js';
 import type { Epic, EpicStatus, Sprint } from '../../core/types.js';
 
 interface EpicArgs extends minimist.ParsedArgs {
@@ -118,7 +119,13 @@ async function createEpic(rest: string[], args: EpicArgs): Promise<void> {
 
     if (args.description) options.description = args.description;
     if (args.goal) options.goal = args.goal;
-    if (args.color) options.color = args.color;
+    if (args.color) {
+      if (!isValidColor(args.color)) {
+        console.error(chalk.red(COLOR_ERROR));
+        process.exit(1);
+      }
+      options.color = args.color;
+    }
     if (args.sprint) {
       const sprint = sprints.find((s: Sprint) => s.id === args.sprint);
       if (!sprint) {
@@ -270,7 +277,13 @@ async function editEpic(rest: string[], args: EpicArgs): Promise<void> {
   else if (args.goal !== undefined) updates.goal = String(args.goal);
 
   if (args['clear-color']) updates.color = undefined;
-  else if (args.color !== undefined) updates.color = String(args.color);
+  else if (args.color !== undefined) {
+    if (!isValidColor(String(args.color))) {
+      console.error(chalk.red(COLOR_ERROR));
+      process.exit(1);
+    }
+    updates.color = String(args.color);
+  }
 
   if (args['clear-sprint']) updates.sprint = undefined;
   else if (args.sprint !== undefined) updates.sprint = String(args.sprint);

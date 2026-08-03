@@ -3,6 +3,7 @@ import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
 import type { TicketType } from '../../core/types.js';
 import { notifier } from '../../core/notifier.js';
+import { COLOR_ERROR, isValidColor } from '../../core/color.js';
 
 interface CreateArgs extends minimist.ParsedArgs {
   assignee?: string;
@@ -102,6 +103,10 @@ export async function createTicket(args: CreateArgs): Promise<void> {
       
       case 'epic': {
         const sprintId = args.sprint ? await resolveSprint(String(args.sprint)) : undefined;
+        if (args.color && !isValidColor(args.color)) {
+          console.log(chalk.red(`Error: ${COLOR_ERROR}`));
+          process.exit(1);
+        }
 
         const epic = await storage.createEpic(title, {
           description: args.description,
@@ -117,6 +122,8 @@ export async function createTicket(args: CreateArgs): Promise<void> {
         console.log(`  Name: ${epic.name}`);
         console.log(`  Status: ${epic.status}`);
         console.log(`  Sprint: ${epic.sprint || 'none'}`);
+        if (epic.goal) console.log(`  Goal: ${epic.goal}`);
+        if (epic.color) console.log(`  Color: ${epic.color}`);
         if (epic.description) console.log(`  Description: ${epic.description}`);
         if (!epic.sprint) {
           console.log();

@@ -3,17 +3,24 @@
   import type { Sprint, Ticket, User } from './stores';
   import { claudeAvailable } from './settings';
   import { runPrompt } from './claudeRun';
-  import { sprintBreakdownPrompt, sprintPlanPrompt, triagePrompt } from './prompts';
+  import { epicPlanPrompt, sprintBreakdownPrompt, triagePrompt } from './prompts';
   import Sparkles from './icons/Sparkles.svelte';
   import X from './icons/X.svelte';
 
   export let tickets: Ticket[] = [];
   export let users: User[] = [];
   export let sprints: Sprint[] = [];
+  /** Active workspace sprint, or null in the Unsorted pseudo-workspace. */
+  export let workspace: Sprint | null = null;
 
   const dispatch = createEventDispatcher();
 
-  type Item = { id: string; severity: 'info' | 'warn' | 'high'; title: string; detail: string; kind: 'filter' | 'draft_sprint'; params?: any };
+  // Every finding filters the board. The old `draft_sprint` kind — "draft the
+  // next sprint out of the sprintless backlog" — stopped being reachable when
+  // a sprint became the workspace frame (tas-hr2pCGjr); the ungrouped-backlog
+  // finding below is its epic-shaped replacement (tas-R0J1AGqs). `plan` marks
+  // the findings that additionally offer a Claude hand-off.
+  type Item = { id: string; severity: 'info' | 'warn' | 'high'; title: string; detail: string; kind: 'filter'; params?: any; plan?: boolean };
 
   $: findings = compute(tickets);
 
@@ -64,6 +71,7 @@
         detail: 'Group them so the board reads as work streams, not a flat list.',
         kind: 'filter',
         params: { epic: 'none' },
+        plan: true,
       });
     }
     return {
@@ -79,8 +87,13 @@
   function copyFullTriage() {
     runPrompt(triagePrompt(tickets, users, sprints), { label: 'Triage' });
   }
-  function copyPlan() {
-    runPrompt(sprintPlanPrompt(sprints, tickets, users), { label: 'Sprint plan' });
+  // Hand the ungrouped backlog to Claude to bucket into epics. The epic-shaped
+  // successor to the old "draft the next sprint" action (tas-R0J1AGqs).
+  function groupIntoEpics() {
+    runPrompt(epicPlanPrompt(workspace, tickets, users), {
+      cwd: workspace?.worktree?.path,
+      label: 'Group backlog into epics',
+    });
   }
   function planSprint(sprint: Sprint) {
     runPrompt(sprintBreakdownPrompt(sprint, tickets, users), {
@@ -90,8 +103,7 @@
   }
   $: planningSprints = sprints.filter(s => s.status === 'planning' && !!s.goal && s.goal.trim().length > 0);
   function runItem(item: Item) {
-    if (item.kind === 'draft_sprint') copyPlan();
-    else dispatch('applyFilter', item.params || {});
+    dispatch('applyFilter', item.params || {});
   }
 </script>
 
@@ -144,11 +156,12 @@
         <div class="detail">{it.detail}</div>
       {/if}
       <div class="row-actions">
-        <button class="btn" on:click={() => runItem(it)}>
-          {it.kind === 'draft_sprint'
-            ? ($claudeAvailable ? 'Run in Claude' : 'Copy plan prompt')
-            : 'Show me'}
-        </button>
+        {#if it.plan}
+          <button class="btn" on:click={groupIntoEpics}>
+            {$claudeAvailable ? 'Group with Claude' : 'Copy grouping prompt'}
+          </button>
+        {/if}
+        <button class="btn" on:click={() => runItem(it)}>Show me</button>
       </div>
     </div>
   {/each}
@@ -213,6 +226,6 @@
     padding: 1px 4px;
     font-size: 10.5px;
   }
-  .row-actions { display: flex; justify-content: flex-end; }
+  .row-actions { display: flex; justify-content: flex-end; gap: 8px; }
   .empty { color: var(--faint); font-size: 12.5px; padding: 20px; text-align: center; }
 </style>

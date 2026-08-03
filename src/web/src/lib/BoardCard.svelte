@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { Epic, Sprint, Ticket, User } from './stores';
+  import type { Epic, Ticket, User } from './stores';
   import { avatarColorFor, initials, PRIORITY_META } from './util';
   import { draggingTicketId } from './drag';
   import Bug from './icons/Bug.svelte';
@@ -8,7 +8,6 @@
   import MessageSquare from './icons/MessageSquare.svelte';
 
   export let ticket: Ticket;
-  export let sprint: Sprint | undefined = undefined;
   export let epic: Epic | undefined = undefined;
   export let assignee: User | undefined = undefined;
   export let assigneeIndex = 0;
@@ -58,13 +57,16 @@
   </div>
   <div class="title">{ticket.title}</div>
   <div class="row3">
+    <!--
+      No sprint-name fallback chip. The board is workspace-scoped, so inside a
+      sprint every epic-less card would carry the identical chip — the same
+      reasoning ListView used when it dropped its Sprint column (tas-nuu2zscR).
+    -->
     {#if epic}
       <span class="epic-chip" style="border-color:{epic.color || 'var(--border-2)'};color:{epic.color || 'var(--muted)'}">
         <span class="epic-dot" style="background:{epic.color || 'var(--muted)'}"></span>
         {epic.name}
       </span>
-    {:else if sprint}
-      <span class="sprint-chip">{sprint.name}</span>
     {/if}
     {#if ticket.estimate}
       <span class="mono pts">{ticket.estimate}pt</span>
@@ -127,18 +129,6 @@
     align-items: center;
     gap: 6px;
     margin-top: 2px;
-  }
-  .sprint-chip {
-    font-size: 10px;
-    padding: 2px 6px;
-    background: var(--surface);
-    border: 1px solid var(--border-2);
-    border-radius: 5px;
-    max-width: 120px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--muted);
   }
   .epic-chip {
     display: inline-flex;

@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import type { TicketWorktree } from './types.js';
 
 const execAsync = promisify(exec);
 
@@ -120,6 +121,91 @@ export async function createSprintWorktree(opts: CreateSprintWorktreeOptions): P
   }
 
   return { path: wtPath, branch };
+}
+
+export function defaultEpicWorktreePath(repoRoot: string, epicId: string, override?: string): string {
+  if (override) return path.resolve(override);
+  const envRoot = process.env.TKXR_WORKTREE_ROOT;
+  if (envRoot) return path.resolve(envRoot, 'epics', epicId);
+  const parent = path.dirname(repoRoot);
+  const name = path.basename(repoRoot);
+  return path.join(parent, `${name}-worktrees`, 'epics', epicId);
+}
+
+export function defaultEpicBranch(epicId: string, override?: string): string {
+  if (override) return override;
+  return `tkxr/epic/${epicId}`;
+}
+
+export interface CreateEpicWorktreeOptions {
+  epicId: string;
+  path?: string;
+  branch?: string;
+  base?: string;
+  cwd?: string;
+}
+
+/**
+ * An epic is the unit that maps to a feature branch, so this is the worktree
+ * most ticket branches should hang off (tas-IK2HcQWo). Sprint worktrees still
+ * exist — a sprint frames the workspace and the orchestrator flow merges into
+ * its branch — but an epic branch is the closer parent for ticket work.
+ */
+export async function createEpicWorktree(opts: CreateEpicWorktreeOptions): Promise<{ path: string; branch: string }> {
+  const cwd = opts.cwd || process.cwd();
+  if (!(await isGitRepo(cwd))) {
+    throw new Error('Not a git repository — worktree operations require git.');
+  }
+  const repoRoot = await getRepoRoot(cwd);
+  const wtPath = defaultEpicWorktreePath(repoRoot, opts.epicId, opts.path);
+  const branch = defaultEpicBranch(opts.epicId, opts.branch);
+  const base = opts.base || 'HEAD';
+
+  try {
+    await fs.access(wtPath);
+    throw new Error(`Path already exists: ${wtPath}`);
+  } catch (err: any) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+
+  await fs.mkdir(path.dirname(wtPath), { recursive: true });
+
+  const branchExists = await checkBranchExists(branch, repoRoot);
+  const quotedPath = `"${wtPath}"`;
+  const cmd = branchExists
+    ? `git worktree add ${quotedPath} ${branch}`
+    : `git worktree add -b ${branch} ${quotedPath} ${base}`;
+  try {
+    await run(cmd, repoRoot);
+  } catch (err: any) {
+    throw new Error(`git worktree add failed: ${(err.stderr || err.message || '').trim()}`);
+  }
+
+  return { path: wtPath, branch };
+}
+
+/**
+ * The branch a ticket's own branch should hang off, or null for "nothing more
+ * specific than HEAD / the repo default".
+ *
+ * Order is epic → sprint → nothing. Before epics existed, a ticket branch was
+ * based on its sprint branch, which made sense when a sprint *was* the unit of
+ * work. A sprint now frames the whole workspace, so basing every ticket in it
+ * off one long-lived branch is a weak default; the epic is what maps to a
+ * feature branch. The sprint branch stays as the fallback so the orchestrator
+ * flow (fan out per ticket, merge into the sprint branch) keeps working
+ * unchanged for epic-less tickets (tas-IK2HcQWo).
+ *
+ * Takes the resolved entities rather than ids so every caller — CLI, REST, MCP —
+ * shares the ordering without this module needing storage access.
+ */
+export function resolveTicketBase(
+  epic: { worktree?: TicketWorktree | null } | null | undefined,
+  sprint: { worktree?: TicketWorktree | null } | null | undefined,
+): string | null {
+  if (epic?.worktree) return epic.worktree.branch;
+  if (sprint?.worktree) return sprint.worktree.branch;
+  return null;
 }
 
 export interface CreateWorktreeOptions {

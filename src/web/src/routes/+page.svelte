@@ -80,7 +80,12 @@
       if (s) {
         const j = JSON.parse(s);
         view = j.view || 'board';
-        activeSprint = j.activeSprint || '';
+        // `all` was the pre-workspace value, when `activeSprint` was just a
+        // filter. It's not a sprint id, so the reset guard below (which needs
+        // `$sprintStore.length > 0`) can't clear it in a project with zero
+        // sprints — it would survive and get re-persisted. Map it to "no
+        // workspace picked" on the way in instead.
+        activeSprint = j.activeSprint === 'all' ? '' : (j.activeSprint || '');
         activeEpic = j.activeEpic || 'all';
         activeUser = j.activeUser || 'all';
         typeFilter = j.typeFilter || 'all';
@@ -315,23 +320,37 @@
     return q;
   })();
 
+  // A person filter used to retitle the toolbar to their name. When epics
+  // landed, `contextTitle` was rewritten around epic + workspace only, so the
+  // sidebar highlight became the sole cue that a person filter was on — easy to
+  // miss on a board that looks legitimately empty. Person wins the title when
+  // set, because it's the narrowest of the three scopes (tas-nuu2zscR).
+  $: activeUserObj = activeUser !== 'all' && activeUser !== 'none'
+    ? ($userStore as User[]).find(u => u.id === activeUser) || null
+    : null;
+  $: activeEpicObj = activeEpic !== 'all' && activeEpic !== 'none'
+    ? ($epicStore as Epic[]).find(ep => ep.id === activeEpic) || null
+    : null;
+
   $: contextTitle = (() => {
-    if (activeEpic !== 'all' && activeEpic !== 'none') {
-      const e = ($epicStore as Epic[]).find(ep => ep.id === activeEpic);
-      if (e) return e.name;
-    }
+    if (activeUserObj) return activeUserObj.displayName;
+    if (activeUser === 'none') return 'Unassigned';
+    if (activeEpicObj) return activeEpicObj.name;
     if (activeEpic === 'none') return 'No epic';
     if (isUnsorted) return 'Unsorted';
     return workspaceSprint?.name || 'Workspace';
   })();
 
   $: contextSubtitle = (() => {
-    if (isUnsorted) return 'Tickets that belong to no sprint';
-    const base = workspaceSprint?.name || '';
-    if (activeEpic !== 'all' && activeEpic !== 'none') {
-      const e = ($epicStore as Epic[]).find(ep => ep.id === activeEpic);
-      return e?.goal || base;
+    const base = isUnsorted ? 'Unsorted' : (workspaceSprint?.name || '');
+    // With a person filter on, the subtitle carries the scope they're inside —
+    // otherwise the title says a name and nothing says which epic/workspace.
+    if (activeUserObj || activeUser === 'none') {
+      const scope = activeEpicObj ? `${activeEpicObj.name} · ${base}` : base;
+      return scope ? `in ${scope}` : '';
     }
+    if (isUnsorted) return 'Tickets that belong to no sprint';
+    if (activeEpicObj) return activeEpicObj.goal || base;
     return workspaceSprint?.goal || '';
   })();
 
@@ -541,7 +560,6 @@
         {#if view === 'board'}
           <Board
             query={boardQuery}
-            sprints={$sprintStore}
             epics={workspaceEpics}
             users={$userStore}
             {commentCounts}
@@ -598,6 +616,7 @@
         {isCreate}
         sprintId={activeSprint && !isUnsorted ? activeSprint : null}
         sprints={$sprintStore}
+        users={$userStore}
         on:reload={reload}
         on:close={closePanel}
         on:openTicket={(e) => openTicket(e.detail)}
@@ -619,6 +638,7 @@
       tickets={$ticketStore}
       users={$userStore}
       sprints={$sprintStore}
+      workspace={workspaceSprint}
       on:reload={reload}
       on:close={closePanel}
       on:openSprint={(e) => openSprintPanel(e.detail)}

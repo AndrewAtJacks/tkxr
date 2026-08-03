@@ -1,14 +1,16 @@
 <script lang="ts">
-  // Read-only branch state for tickets + sprints. Fetches from
-  // /api/tickets/:id/git or /api/sprints/:id/git and renders commits +
-  // diff-stat + a GitHub link. Solves the "commits are invisible because
-  // they live in a per-ticket worktree outside VSCode" gap.
+  // Read-only branch state for tickets, epics + sprints. Fetches from
+  // /api/<scope>s/:id/git and renders commits + diff-stat + a GitHub link.
+  // Solves the "commits are invisible because they live in a per-ticket
+  // worktree outside VSCode" gap.
 
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { copyToClipboard, showToast } from './clipboard';
   import { ghConfig } from './stores';
 
-  export let scope: 'ticket' | 'sprint';
+  export let scope: 'ticket' | 'epic' | 'sprint';
+  /** `/api/tickets`, `/api/epics`, `/api/sprints` — the scope's REST collection. */
+  $: collection = scope === 'ticket' ? 'tickets' : scope === 'epic' ? 'epics' : 'sprints';
   export let id: string;
   /** Worktree path — shown in the footer so the user knows where the branch lives. */
   export let worktreePath: string;
@@ -50,7 +52,7 @@
     loading = true;
     error = null;
     try {
-      const path = scope === 'ticket' ? `/api/tickets/${id}/git` : `/api/sprints/${id}/git`;
+      const path = `/api/${collection}/${id}/git`;
       const res = await fetch(path);
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
@@ -103,7 +105,7 @@
     prBusy = true;
     prError = null;
     try {
-      const path = scope === 'ticket' ? `/api/tickets/${id}/pr` : `/api/sprints/${id}/pr`;
+      const path = `/api/${collection}/${id}/pr`;
       const res = await fetch(path, { method: 'POST' });
       const body = await res.json().catch(() => ({} as any));
       if (!res.ok) {
