@@ -3,7 +3,7 @@
   import type { Sprint, Ticket, User } from './stores';
   import { claudeAvailable } from './settings';
   import { runPrompt } from './claudeRun';
-  import { epicPlanPrompt, sprintBreakdownPrompt, triagePrompt } from './prompts';
+  import { epicPlanPrompt, triagePrompt } from './prompts';
   import { normalizeTicket } from './util';
   import { showToast } from './clipboard';
   import Sparkles from './icons/Sparkles.svelte';
@@ -125,13 +125,6 @@
       planBusy = false;
     }
   }
-  function planSprint(sprint: Sprint) {
-    runPrompt(sprintBreakdownPrompt(sprint, tickets, users), {
-      cwd: sprint.worktree?.path,
-      label: 'Plan ' + sprint.name,
-    });
-  }
-  $: planningSprints = sprints.filter(s => s.status === 'planning' && !!s.goal && s.goal.trim().length > 0);
   function runItem(item: Item) {
     dispatch('applyFilter', item.params || {});
   }
@@ -161,20 +154,11 @@
     </button>
   </div>
 
-  {#each planningSprints as s (s.id)}
-    <div class="card">
-      <div class="row1">
-        <Sparkles size={14} color="var(--ai)" />
-        <span class="t">Plan sprint "{s.name}" with Claude</span>
-      </div>
-      <div class="detail">Break the goal into child tickets (waves via <code>dependsOn</code>). Guardrails: won't touch existing tickets, capped at ~12 new tickets.</div>
-      <div class="row-actions">
-        <button class="btn" on:click={() => planSprint(s)}>
-          {$claudeAvailable ? 'Plan with Claude' : 'Copy plan prompt'}
-        </button>
-      </div>
-    </div>
-  {/each}
+  <!--
+    No "plan this sprint" card. Planning is epic-level — a sprint has no goal
+    worth decomposing, an epic does. Triage's job at this level is to sort the
+    sprint's tickets into epics, which the ungrouped-backlog finding does.
+  -->
 
   {#each findings.items as it}
     <div class="card">
@@ -196,7 +180,7 @@
     </div>
   {/each}
 
-  {#if findings.items.length === 0 && planningSprints.length === 0}
+  {#if findings.items.length === 0}
     <div class="empty">Nothing needs attention. 🎉</div>
   {/if}
 </div>
@@ -250,12 +234,6 @@
   .dot { width: 8px; height: 8px; border-radius: 3px; flex: none; }
   .t { font-size: 12.5px; font-weight: 600; color: var(--text); }
   .detail { font-size: 12px; color: var(--muted); }
-  .detail code {
-    background: var(--surface);
-    border-radius: 4px;
-    padding: 1px 4px;
-    font-size: 10.5px;
-  }
   .row-actions { display: flex; justify-content: flex-end; gap: 8px; }
   .empty { color: var(--faint); font-size: 12.5px; padding: 20px; text-align: center; }
 </style>

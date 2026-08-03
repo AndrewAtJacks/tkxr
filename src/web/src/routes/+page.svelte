@@ -602,7 +602,6 @@
       <SprintPanel
         sprint={activeSprintSel}
         {isCreate}
-        tickets={$ticketStore}
         users={$userStore}
         on:reload={reload}
         on:close={closePanel}

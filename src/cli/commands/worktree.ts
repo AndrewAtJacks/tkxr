@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
-import { BranchKeptError, createEpicWorktree, createSprintWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree, resolveTicketBase } from '../../core/worktree.js';
+import { BranchKeptError, createEpicWorktree, createWorktree, isGitRepo, listWorktrees, removeWorktree, resolveTicketBase } from '../../core/worktree.js';
 
 interface WorktreeArgs extends minimist.ParsedArgs {
   _: string[];
@@ -49,11 +49,18 @@ export async function manageWorktree(args: WorktreeArgs): Promise<void> {
 
   const storage = await createStorage();
 
-  if (ticketId.startsWith('spr-')) {
-    return sprintOp(sub, ticketId, args, storage);
-  }
   if (ticketId.startsWith('epi-')) {
     return epicOp(sub, ticketId, args, storage);
+  }
+
+  // Sprints used to take a worktree. Answer the intent rather than letting it
+  // fall through to "Ticket not found", which reads like a typo.
+  if (ticketId.startsWith('spr-')) {
+    console.log(chalk.red('Sprints own no branch, so they have no worktree.'));
+    console.log(chalk.dim('  An epic is what maps to a feature branch — create one there instead:'));
+    console.log(chalk.dim('    tkxr worktree create <epi-id>'));
+    console.log(chalk.dim('  A sprint frames concurrent work; its only job is triage. See docs/branching-model.md.'));
+    return;
   }
 
   const found = await storage.findTicket(ticketId);
@@ -78,10 +85,7 @@ export async function manageWorktree(args: WorktreeArgs): Promise<void> {
         const epic = found.ticket.epic
           ? (await storage.getEpics()).find(e => e.id === found.ticket.epic)
           : null;
-        const sprint = found.ticket.sprint
-          ? (await storage.getSprints()).find(s => s.id === found.ticket.sprint)
-          : null;
-        effectiveBase = resolveTicketBase(epic, sprint) || undefined;
+        effectiveBase = resolveTicketBase(epic) || undefined;
       }
       const result = await createWorktree({
         ticketId,
@@ -160,13 +164,9 @@ async function epicOp(sub: string, epicId: string, args: WorktreeArgs, storage: 
       return;
     }
     try {
-      // An epic-less base default: the epic's sprint branch when the workspace
-      // has one, otherwise HEAD. Mirrors how a ticket nests under its epic.
-      let effectiveBase = args.base;
-      if (!effectiveBase && epic.sprint) {
-        const sprint = (await storage.getSprints()).find(s => s.id === epic.sprint);
-        if (sprint?.worktree) effectiveBase = sprint.worktree.branch;
-      }
+      // An epic branch forks from the repo default — a sprint owns no branch to
+      // nest under (docs/branching-model.md).
+      const effectiveBase = args.base;
       const result = await createEpicWorktree({
         epicId,
         path: args.path,
@@ -223,93 +223,18 @@ async function epicOp(sub: string, epicId: string, args: WorktreeArgs, storage: 
   console.log(chalk.red(`Unknown subcommand for epic: ${sub}`));
 }
 
-async function sprintOp(sub: string, sprintId: string, args: WorktreeArgs, storage: Awaited<ReturnType<typeof createStorage>>): Promise<void> {
-  const sprints = await storage.getSprints();
-  const sprint = sprints.find(s => s.id === sprintId);
-  if (!sprint) {
-    console.log(chalk.red(`Sprint "${sprintId}" not found`));
-    return;
-  }
-
-  if (sub === 'create') {
-    if (sprint.worktree) {
-      console.log(chalk.red(`Sprint already has a worktree at ${sprint.worktree.path}`));
-      console.log(chalk.dim(`Remove it first with: tkxr worktree remove ${sprintId}`));
-      return;
-    }
-    if (!(await isGitRepo())) {
-      console.log(chalk.red('Not a git repository.'));
-      return;
-    }
-    try {
-      const result = await createSprintWorktree({
-        sprintId,
-        path: args.path,
-        branch: args.branch,
-        base: args.base,
-      });
-      const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
-      const updated = await storage.updateSprint(sprintId, { worktree: wt });
-      if (updated) await notifier.notifySprintUpdated(updated);
-      console.log(chalk.green(`✓ Sprint worktree created`));
-      console.log(`  Path:   ${chalk.blue(result.path)}`);
-      console.log(`  Branch: ${chalk.blue(result.branch)}${args.base ? chalk.dim(`  (based on ${args.base})`) : ''}`);
-      console.log(chalk.dim(`  cd "${result.path}"`));
-      console.log(chalk.dim(`  Tickets in this workspace with no epic worktree will branch off ${result.branch}.`));
-    } catch (err) {
-      console.log(chalk.red(`Failed: ${err instanceof Error ? err.message : String(err)}`));
-    }
-    return;
-  }
-
-  if (sub === 'remove') {
-    const wt = sprint.worktree;
-    if (!wt) {
-      console.log(chalk.yellow(`Sprint "${sprintId}" has no worktree.`));
-      return;
-    }
-    try {
-      await removeWorktree({
-        path: wt.path,
-        branch: wt.branch,
-        force: !!args.force,
-        keepBranch: !!args['keep-branch'],
-      });
-      const updated = await storage.updateSprint(sprintId, { worktree: null });
-      if (updated) await notifier.notifySprintUpdated(updated);
-      console.log(chalk.green(`✓ Sprint worktree removed`));
-      console.log(`  Path:   ${wt.path}`);
-      console.log(`  Branch: ${wt.branch}${args['keep-branch'] ? chalk.dim(' (kept)') : ' (deleted)'}`);
-    } catch (err) {
-      if (err instanceof BranchKeptError) {
-        const updated = await storage.updateSprint(sprintId, { worktree: null });
-        if (updated) await notifier.notifySprintUpdated(updated);
-        console.log(chalk.green(`✓ Sprint worktree removed`));
-        console.log(`  Path:   ${wt.path}`);
-        console.log(`  Branch: ${wt.branch}${chalk.yellow(' (kept — unmerged commits)')}`);
-        console.log(chalk.dim(`  Delete it anyway with: git branch -D ${wt.branch}`));
-        return;
-      }
-      console.log(chalk.red(`Failed: ${err instanceof Error ? err.message : String(err)}`));
-    }
-    return;
-  }
-
-  console.log(chalk.red(`Unknown subcommand for sprint: ${sub}`));
-}
-
 function showHelp() {
-  console.log(chalk.blue.bold('tkxr worktree — manage per-ticket, per-epic and per-sprint git worktrees'));
+  console.log(chalk.blue.bold('tkxr worktree — manage per-ticket and per-epic git worktrees'));
   console.log();
   console.log(chalk.green('Usage:'));
-  console.log('  tkxr worktree create <id> [options]  Create a worktree + branch for a ticket, epic or sprint');
-  console.log('  tkxr worktree remove <id> [options]  Remove the worktree (id can be a ticket, epic or sprint id)');
+  console.log('  tkxr worktree create <id> [options]  Create a worktree + branch for a ticket or epic');
+  console.log('  tkxr worktree remove <id> [options]  Remove the worktree (id can be a ticket or epic id)');
   console.log('  tkxr worktree list                   List all git worktrees in this repo');
   console.log();
-  console.log(chalk.dim('  Ticket ids start with `tas-`/`bug-`; epic ids with `epi-`; sprint ids with `spr-`.'));
+  console.log(chalk.dim('  Ticket ids start with `tas-`/`bug-`; epic ids with `epi-`.'));
   console.log(chalk.dim('  Epic worktrees default to path ../<repo>-worktrees/epics/<epicId> on tkxr/epic/<epicId>.'));
-  console.log(chalk.dim('  Sprint worktrees default to path ../<repo>-worktrees/sprints/<sprintId> on tkxr/sprint/<sprintId>.'));
-  console.log(chalk.dim('  A ticket branch bases on its epic branch when the epic has a worktree, else its sprint branch, else HEAD.'));
+  console.log(chalk.dim('  A ticket branch bases on its epic branch when the epic has a worktree, else HEAD.'));
+  console.log(chalk.dim('  Sprints own no branch — an epic is what maps to a feature branch.'));
   console.log();
   console.log(chalk.green('Options (create):'));
   console.log('  --path <dir>          Override default path (../<repo>-worktrees/<ticketId>)');
