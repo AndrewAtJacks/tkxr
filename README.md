@@ -5,7 +5,7 @@ tkxr is a lightweight, file-based ticket manager that lives inside your repo. It
 - a keyboard-driven **sidebar + panel** web UI (Svelte + Vite) for humans,
 - a full **CLI** for scripting and shell workflows,
 - an **MCP server** (stdio bin + HTTP `/mcp` endpoint) so AI agents can drive it,
-- optional **per-ticket and per-sprint git worktrees** so multiple agents can work concurrently without stepping on each other.
+- optional **per-ticket and per-epic git worktrees** so multiple agents can work concurrently without stepping on each other.
 
 Tickets and comments are stored as chunked NDJSON, sprints, epics and users as JSON, all under `./tkxr/` in the working directory. Everything is text you can `git diff`.
 
@@ -97,7 +97,7 @@ backlog → progress → review → done
 
 ### Sprint statuses
 
-`planning → active → completed`. Completing a sprint leaves its worktree alone — remove it explicitly with `tkxr worktree remove <sprint-id>`.
+`planning → active → completed`. A sprint owns no branch or worktree, so completing one has no effect on git state.
 
 ### Epic statuses
 
@@ -281,46 +281,58 @@ sprint-scoped, so such a ticket would not appear under the epic you filed it in.
 
 ### Worktrees
 
-Per-ticket, per-epic and per-sprint git worktrees let multiple agents work in parallel on isolated branches.
+Per-ticket and per-epic git worktrees let multiple agents work in parallel on isolated branches. Sprints own no branch.
 
 ```bash
 tkxr worktree create tas-abc12345
 # → creates ../<repo>-worktrees/tas-abc12345 on branch tkxr/tas-abc12345,
-#   based on the epic branch if the ticket's epic has a worktree,
-#   else the sprint branch if its sprint has one, else HEAD.
+#   based on the epic branch if the ticket's epic has a worktree, else HEAD.
 
 tkxr worktree create epi-abc12345
 # → creates ../<repo>-worktrees/epics/epi-abc12345 on branch tkxr/epic/epi-abc12345,
-#   based on the sprint branch if the epic's workspace has a worktree, else HEAD.
+#   based on HEAD. This is the feature branch its tickets merge into.
 
-tkxr worktree create spr-abc12345
-# → creates ../<repo>-worktrees/sprints/spr-abc12345 on branch tkxr/sprint/spr-abc12345.
 
 tkxr worktree list
 tkxr worktree remove tas-abc12345                     # deletes the dir + merged branch
 tkxr worktree remove tas-abc12345 --keep-branch       # keep the branch around
 tkxr worktree remove epi-abc12345
-tkxr worktree remove spr-abc12345 --force
 ```
 
 Options for `create`: `--path <dir>`, `--branch <name>`, `--base <ref>`.
 Options for `remove`: `--force`, `--keep-branch`.
 Override the worktree parent directory with the `TKXR_WORKTREE_ROOT` env var.
 
-**Branch hierarchy.** An epic is the unit that maps to a feature branch, so a
-ticket branch bases on its **epic** branch when the epic has a worktree, falling
-back to its **sprint** branch, then `HEAD`. A sprint frames the whole workspace,
-so basing every ticket in it off one long-lived sprint branch is only the right
-default when the tickets have no epic. Sprint worktrees still earn their keep for
-the orchestrator flow, which merges ticket branches into the sprint branch.
+**Branch hierarchy.** A sprint is a frame for concurrent work and owns no branch.
+An epic is a feature and owns one. A ticket is a unit of work inside a feature.
 
-The same order drives PRs: a ticket PRs into its epic branch (or the sprint
-branch when it has no epic worktree), an epic PRs into its sprint branch or the
-repo default, and a sprint PRs into the repo default.
+```
+ticket branch   tkxr/<ticket-id>       →  epic branch
+epic branch     tkxr/epic/<epic-id>    →  main
+sprint          (no branch)
+```
 
-Deleting an epic or a sprint never removes its worktree — remove it explicitly
-first if you want tkxr to clean it up, since the record is the only thing that
-remembers the path.
+So a ticket branch bases on its **epic** branch when the epic has a worktree, and
+on `main` otherwise — a ticket with no epic is a standalone change. PRs follow the
+same shape: ticket into its epic branch, epic into the repo default.
+
+Anything that affects a feature gets grouped into an epic, and the work lands on
+that feature branch. If work doesn't seem to fit an epic, the epic is usually
+missing rather than the sprint needing a branch. See
+[`docs/branching-model.md`](docs/branching-model.md) for the reasoning and the
+tradeoff this accepts.
+
+> **Sprints have no worktree and no branch.** `tkxr worktree create <spr-*>`, the
+> `/api/sprints/:id/worktree` routes, `/api/sprints/:id/git`, `/api/sprints/:id/pr`
+> and `create_sprint_worktree` are all gone, along with the sprint-level
+> orchestrate / commit / plan actions. The only sprint-level activity is triage:
+> sorting a sprint's tickets into epics. Worktrees created under the old model
+> still exist on disk — `tkxr show <spr-*>` prints the path so you can find one,
+> and `git worktree remove` cleans it up.
+
+Deleting an epic never removes its worktree — remove it explicitly first if you
+want tkxr to clean it up, since the record is the only thing that remembers the
+path.
 
 ### Servers
 
@@ -416,7 +428,7 @@ Epic mutations: `create_epic`, `edit_epic`, `delete_epic`.
 
 User mutations: `create_user`, `edit_user`, `delete_user`.
 
-Worktrees: `create_worktree`, `create_epic_worktree`, `create_sprint_worktree`, `remove_worktree`, `remove_epic_worktree`, `remove_sprint_worktree`.
+Worktrees: `create_worktree`, `create_epic_worktree`, `remove_worktree`, `remove_epic_worktree`.
 
 Call `agent_guide` first if you're not sure — it returns a short markdown briefing on the data model, typical flow, dependency rules, and worktree conventions.
 
@@ -576,16 +588,12 @@ POST   /api/tickets/:id/worktree
 DELETE /api/tickets/:id/worktree
 POST   /api/epics/:id/worktree
 DELETE /api/epics/:id/worktree
-POST   /api/sprints/:id/worktree
-DELETE /api/sprints/:id/worktree
 
-# Branch insights + PR flow (per ticket / epic / sprint)
+# Branch insights + PR flow (per ticket / epic)
 GET    /api/tickets/:id/git
 POST   /api/tickets/:id/pr
 GET    /api/epics/:id/git
 POST   /api/epics/:id/pr
-GET    /api/sprints/:id/git
-POST   /api/sprints/:id/pr
 
 # MCP over HTTP
 POST   /mcp
@@ -816,7 +824,7 @@ buffered frames the server still holds.
 
 #### Web UI behavior
 
-The action buttons in `TicketPanel`, `SprintPanel`, and `TriagePanel` swap
+The action buttons in `TicketPanel`, `EpicPanel`, and `TriagePanel` swap
 their label based on `$claudeConfig.available`:
 
 - **Available** — button reads "Run in Claude" (or "Plan with Claude" for
@@ -826,9 +834,10 @@ their label based on `$claudeConfig.available`:
   prompt" / "Copy triage prompt") and drops the prompt on the clipboard,
   preserving the pre-integration flow.
 
-Sprints also get a **"Plan sprint with Claude"** action on `SprintPanel` and
-`TriagePanel` that runs the `sprintBreakdownPrompt` — Claude reads the
-sprint goal, drafts child tickets, and can create them via the MCP tools.
+Sprints get no agent actions beyond triage. Planning, orchestration and
+committing are epic-level — a sprint has no goal worth decomposing and no
+bounded ticket set to fan out over. See
+[`docs/branching-model.md`](docs/branching-model.md).
 
 Epics get two actions on `EpicPanel`:
 

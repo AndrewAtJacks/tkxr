@@ -75,6 +75,21 @@ see the migration note under _Changed_.
   finding now offers a Claude hand-off that buckets loose backlog
   tickets into epics (capped at 5, no status/priority changes).
 
+### Removed
+- **Sprint-level branches and orchestration.** A sprint frames concurrent
+  work; an epic is the thing that maps to a feature branch. Sprints no
+  longer own a branch or a worktree, and the only sprint-level activity
+  left is triage — sorting a sprint's tickets into epics. Removed:
+  `tkxr worktree create|remove <spr-*>`, `POST`/`DELETE
+  /api/sprints/:id/worktree`, `GET /api/sprints/:id/git`,
+  `POST /api/sprints/:id/pr`, the `create_sprint_worktree` /
+  `remove_sprint_worktree` MCP tools, and the sprint orchestrate /
+  commit / plan actions with their prompts. The epic equivalents already
+  exist. `Sprint.worktree` stays in the type as read-only legacy so
+  pre-existing records don't silently lose the path — `tkxr show <spr-*>`
+  still prints it, and `git worktree remove` cleans one up. Rationale and
+  the tradeoff this accepts: `docs/branching-model.md`.
+
 ### Changed
 - **A sprint is now required to enter the board.** With no active
   workspace you land on the switcher instead of an unscoped ticket
@@ -92,13 +107,10 @@ see the migration note under _Changed_.
 - `--sprint` and `--epic` are validated on every CLI path that accepts
   them. A dangling reference surfaces no error anywhere downstream, it
   just hides the entity, so unknown ids now exit `1`.
-- **Ticket branches base on their epic branch first.** The base order is
-  now epic → sprint → `HEAD`, where it used to be sprint → `HEAD`. An
-  epic is the unit that maps to a feature branch; a sprint frames the
-  whole workspace, so basing every ticket in it off one long-lived
-  sprint branch was only ever right for epic-less tickets. Branch
-  insights and the ticket PR base follow the same order. Sprint
-  worktrees are unchanged and still back the orchestrator flow.
+- **Ticket branches base on their epic branch.** The base is the epic
+  branch when the epic has a worktree, else `HEAD` — a ticket with no
+  epic is a standalone change and forks from the repo default. Branch
+  insights and the ticket PR base follow the same rule.
 - **`tkxr delete` warns when the entity owns a worktree.** Deleting
   never removes one, and the record is the only thing that remembers
   the path, so the pre-delete summary now prints the path, the branch

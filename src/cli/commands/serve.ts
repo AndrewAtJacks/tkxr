@@ -18,7 +18,7 @@ import { createStorage, type TicketQueryOptions, type TicketSortBy } from '../..
 import { notifier } from '../../core/notifier.js';
 import { COLOR_ERROR, isValidColor } from '../../core/color.js';
 import { SERVER_INSTRUCTIONS, TOOL_MAP, TOOLS, type ToolContext } from '../../mcp/tools.js';
-import { BranchKeptError, createEpicWorktree, createSprintWorktree, createWorktree, getRepoRoot, isGitRepo, listWorktrees, removeWorktree, resolveTicketBase } from '../../core/worktree.js';
+import { BranchKeptError, createEpicWorktree, createWorktree, getRepoRoot, isGitRepo, listWorktrees, removeWorktree, resolveTicketBase } from '../../core/worktree.js';
 import { getBranchInsights, getRemoteInfo, detectDefaultBase } from '../../core/gitInsights.js';
 import { discoverGh, pushAndOpenPr, PrFlowError, type GhConfig } from '../../core/prFlow.js';
 import {
@@ -1226,10 +1226,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
         const epic = found.ticket.epic
           ? (await storage.getEpics()).find(e => e.id === found.ticket.epic)
           : null;
-        const sprint = found.ticket.sprint
-          ? (await storage.getSprints()).find(s => s.id === found.ticket.sprint)
-          : null;
-        effectiveBase = resolveTicketBase(epic, sprint) || undefined;
+        effectiveBase = resolveTicketBase(epic) || undefined;
       }
       const result = await createWorktree({ ticketId: id, path: p, branch, base: effectiveBase, cwd: originalCwd });
       const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
@@ -1251,12 +1248,9 @@ export async function startServer(args: ServeArgs): Promise<void> {
       }
       if (!(await isGitRepo(originalCwd))) return res.status(400).json({ error: 'Not a git repository' });
       const { path: p, branch, base } = req.body || {};
-      // An epic nests under its workspace the way a ticket nests under its epic.
-      let effectiveBase = base;
-      if (!effectiveBase && epic.sprint) {
-        const sprint = (await storage.getSprints()).find(s => s.id === epic.sprint);
-        if (sprint?.worktree) effectiveBase = sprint.worktree.branch;
-      }
+      // An epic branch forks from the repo default. A sprint owns no branch to
+      // nest under (docs/branching-model.md), so `HEAD` unless overridden.
+      const effectiveBase = base;
       const result = await createEpicWorktree({ epicId: id, path: p, branch, base: effectiveBase, cwd: originalCwd });
       const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
       const updated = await storage.updateEpic(id, { worktree: wt });
@@ -1290,54 +1284,6 @@ export async function startServer(args: ServeArgs): Promise<void> {
       res.json({ epic: updated, removed: wt, branchKept });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to remove epic worktree' });
-    }
-  });
-
-  app.post('/api/sprints/:id/worktree', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const sprint = (await storage.getSprints()).find(s => s.id === id);
-      if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
-      if (sprint.worktree) {
-        return res.status(409).json({ error: `Sprint already has a worktree at ${sprint.worktree.path}` });
-      }
-      if (!(await isGitRepo(originalCwd))) return res.status(400).json({ error: 'Not a git repository' });
-      const { path: p, branch, base } = req.body || {};
-      const result = await createSprintWorktree({ sprintId: id, path: p, branch, base, cwd: originalCwd });
-      const wt = { path: result.path, branch: result.branch, createdAt: new Date().toISOString() };
-      const updated = await storage.updateSprint(id, { worktree: wt });
-      if (updated) broadcast(wss, { type: 'sprint_updated', data: updated });
-      // `basedOn` mirrors the ticket and epic routes — a sprint has no parent to
-      // resolve a base from, but the response shape shouldn't differ by entity.
-      res.json({ sprint: updated, worktree: wt, basedOn: base || 'HEAD' });
-    } catch (error) {
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create sprint worktree' });
-    }
-  });
-
-  app.delete('/api/sprints/:id/worktree', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const sprint = (await storage.getSprints()).find(s => s.id === id);
-      if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
-      const wt = sprint.worktree;
-      if (!wt) return res.status(404).json({ error: 'Sprint has no worktree' });
-      const force = req.query.force === 'true' || req.body?.force === true;
-      const keepBranch = req.query.keepBranch === 'true' || req.body?.keepBranch === true;
-      let branchKept: string | null = null;
-      try {
-        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
-      } catch (err) {
-        // Worktree removed, branch declined for unmerged commits — a success
-        // with a caveat, not a failure. Anything else is a real error.
-        if (!(err instanceof BranchKeptError)) throw err;
-        branchKept = wt.branch;
-      }
-      const updated = await storage.updateSprint(id, { worktree: null });
-      if (updated) broadcast(wss, { type: 'sprint_updated', data: updated });
-      res.json({ sprint: updated, removed: wt, branchKept });
-    } catch (error) {
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to remove sprint worktree' });
     }
   });
 
@@ -1397,39 +1343,13 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const insightsEpic = found.ticket.epic
         ? (await storage.getEpics()).find(e => e.id === found.ticket.epic)
         : null;
-      const insightsSprint = found.ticket.sprint
-        ? (await storage.getSprints()).find(s => s.id === found.ticket.sprint)
-        : null;
-      const base = resolveTicketBase(insightsEpic, insightsSprint) || undefined;
+      const base = resolveTicketBase(insightsEpic) || undefined;
 
       const remote = await getRemoteInfo(originalCwd);
       const insights = await getBranchInsights({
         cwd: wt.path,
         branch: wt.branch,
         base,
-        remote,
-      });
-      res.json({ insights, remote });
-    } catch (error) {
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to read branch insights' });
-    }
-  });
-
-  app.get('/api/sprints/:id/git', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const sprint = (await storage.getSprints()).find(s => s.id === id);
-      if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
-      const wt = sprint.worktree;
-      if (!wt) return res.status(409).json({ error: 'Sprint has no worktree' });
-
-      // No `base` passed: a sprint sits at the top of the hierarchy, so
-      // `getBranchInsights` resolving the repo default is the right comparison.
-      // The ticket and epic routes resolve a parent branch instead.
-      const remote = await getRemoteInfo(originalCwd);
-      const insights = await getBranchInsights({
-        cwd: wt.path,
-        branch: wt.branch,
         remote,
       });
       res.json({ insights, remote });
@@ -1446,20 +1366,12 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const wt = epic.worktree;
       if (!wt) return res.status(409).json({ error: 'Epic has no worktree' });
 
-      // An epic branch is compared against its workspace's sprint branch when
-      // one exists — that's what it forked from — and otherwise the repo
-      // default, which `getBranchInsights` resolves when `base` is undefined.
-      let base: string | undefined;
-      if (epic.sprint) {
-        const sprint = (await storage.getSprints()).find(s => s.id === epic.sprint);
-        if (sprint?.worktree) base = sprint.worktree.branch;
-      }
-
+      // No `base` passed: an epic branch forks from the repo default, which
+      // `getBranchInsights` resolves for itself when `base` is undefined.
       const remote = await getRemoteInfo(originalCwd);
       const insights = await getBranchInsights({
         cwd: wt.path,
         branch: wt.branch,
-        base,
         remote,
       });
       res.json({ insights, remote });
@@ -1503,10 +1415,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const prEpic = found.ticket.epic
         ? (await storage.getEpics()).find(e => e.id === found.ticket.epic)
         : null;
-      const prSprint = found.ticket.sprint
-        ? (await storage.getSprints()).find(s => s.id === found.ticket.sprint)
-        : null;
-      let base = resolveTicketBase(prEpic, prSprint) || undefined;
+      let base = resolveTicketBase(prEpic) || undefined;
       if (!base) base = await detectDefaultBase(wt.path);
 
       const title = `${found.ticket.type === 'bug' ? 'fix' : 'feat'}: ${found.ticket.title} (${id})`;
@@ -1541,14 +1450,9 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const wt = epic.worktree;
       if (!wt) return res.status(409).json({ error: { code: 'no_worktree', message: 'Epic has no worktree' } });
 
-      // An epic PRs into its workspace's sprint branch when that sprint has a
-      // worktree, otherwise straight into the repo default.
-      let base: string | undefined;
-      if (epic.sprint) {
-        const sprint = (await storage.getSprints()).find(s => s.id === epic.sprint);
-        if (sprint?.worktree) base = sprint.worktree.branch;
-      }
-      if (!base) base = await detectDefaultBase(wt.path);
+      // An epic PRs straight into the repo default — the epic branch *is* the
+      // feature branch, and no sprint branch sits between it and main.
+      const base = await detectDefaultBase(wt.path);
 
       const scopedTickets = (await storage.getAllTickets()).filter(t => t.epic === id);
       const ticketList = scopedTickets.length > 0
@@ -1560,49 +1464,6 @@ export async function startServer(args: ServeArgs): Promise<void> {
         epic.goal?.trim() || epic.description?.trim() || '_(no goal set)_',
         '',
         `Epic: \`${id}\``,
-        '',
-        `## Tickets`,
-        ticketList,
-      ].join('\n');
-
-      const gh: GhConfig = app.locals.gh ?? { available: false };
-      const result = await pushAndOpenPr(
-        { cwd: wt.path, head: wt.branch, base, title, body },
-        gh,
-      );
-      res.json(result);
-    } catch (error) {
-      if (error instanceof PrFlowError) {
-        return res.status(prErrorStatus(error.code)).json({
-          error: { code: error.code, message: error.message, detail: error.detail },
-        });
-      }
-      res.status(500).json({ error: { code: 'unknown', message: error instanceof Error ? error.message : String(error) } });
-    }
-  });
-
-  app.post('/api/sprints/:id/pr', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const sprint = (await storage.getSprints()).find(s => s.id === id);
-      if (!sprint) return res.status(404).json({ error: { code: 'not_found', message: 'Sprint not found' } });
-      const wt = sprint.worktree;
-      if (!wt) return res.status(409).json({ error: { code: 'no_worktree', message: 'Sprint has no worktree' } });
-
-      // Sprints PR into the repo's default branch — main/master/whatever
-      // `origin/HEAD` points at.
-      const base = await detectDefaultBase(wt.path);
-
-      const scopedTickets = (await storage.getAllTickets()).filter(t => t.sprint === id);
-      const ticketList = scopedTickets.length > 0
-        ? scopedTickets.map(t => `- \`${t.id}\` (${t.status}) — ${t.title}`).join('\n')
-        : '_(no tickets attached)_';
-
-      const title = `Sprint: ${sprint.name} (${id})`;
-      const body = [
-        sprint.goal?.trim() || '_(no goal set)_',
-        '',
-        `Sprint: \`${id}\``,
         '',
         `## Tickets`,
         ticketList,

@@ -5,24 +5,15 @@
   import { avatarColorFor, initials, normalizeTicket, sprintDotColor, STATUS_COLOR } from './util';
   import { copyToClipboard, showToast } from './clipboard';
   import CopyId from './CopyId.svelte';
-  import { commitSprintPrompt, orchestrateSprintPrompt, sprintBreakdownPrompt } from './prompts';
-  import BranchInsights from './BranchInsights.svelte';
-  import { runPrompt } from './claudeRun';
   import { onTicketEvent } from './ticketEvents';
   import X from './icons/X.svelte';
   import Plus from './icons/Plus.svelte';
-  import Sparkles from './icons/Sparkles.svelte';
 
   export let sprint: Sprint | null = null;
   export let isCreate = false;
-  // Legacy prop retained so callers don't need to change simultaneously.
-  // Once the main ticketStore is paged (tas-RYc3-yIM), this may only contain
-  // the loaded page — so we no longer trust it. Sprint data comes from a
-  // dedicated `GET /api/tickets?sprint=<id>` fetch below (see tas-z-8q_Ljc).
-  export let tickets: Ticket[] = [];
-  // Keep the prop referenced so svelte-check doesn't flag it as unused; the
-  // parent still binds it during the concurrent tas-RYc3-yIM refactor.
-  $: void tickets;
+  // No `tickets` prop: the panel fetches its own sprint-scoped slice below,
+  // and the last consumer of the caller's paged store was the sprint commit
+  // prompt, which is gone (docs/branching-model.md).
   export let users: User[] = [];
 
   const dispatch = createEventDispatcher();
@@ -153,104 +144,6 @@
     } catch { /* noop */ }
   }
 
-  let worktreeBusy = false;
-
-  async function createSprintWorktree() {
-    if (!sprint || worktreeBusy) return;
-    worktreeBusy = true;
-    try {
-      const res = await fetch(`/api/sprints/${sprint.id}/worktree`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (res.ok) {
-        const j = await res.json();
-        if (j.sprint) {
-          sprint = j.sprint;
-          draft.worktree = j.sprint.worktree;
-        }
-        showToast('Sprint worktree created', 'success');
-        dispatch('reload');
-      } else {
-        const j = await res.json().catch(() => ({}));
-        showToast(j.error || 'Failed to create sprint worktree', 'error', 4000);
-      }
-    } catch {
-      showToast('Failed to create sprint worktree', 'error');
-    } finally {
-      worktreeBusy = false;
-    }
-  }
-
-  async function removeSprintWorktree(force = false) {
-    if (!sprint || worktreeBusy) return;
-    if (!confirm('Remove the sprint worktree? The sprint branch will be deleted too (uncommitted work will be lost if you skip force + the tree is dirty).')) return;
-    worktreeBusy = true;
-    try {
-      const res = await fetch(`/api/sprints/${sprint.id}/worktree${force ? '?force=true' : ''}`, {
-        method: 'DELETE',
-      });
-      if (res.ok) {
-        const j = await res.json();
-        if (j.sprint) {
-          sprint = j.sprint;
-          draft.worktree = null;
-        }
-        showToast('Sprint worktree removed', 'success');
-        dispatch('reload');
-      } else {
-        const j = await res.json().catch(() => ({}));
-        const msg = j.error || 'Failed to remove sprint worktree';
-        if (!force && /uncommitted|locked|dirty/i.test(msg)) {
-          if (confirm(`${msg}\n\nForce remove?`)) {
-            worktreeBusy = false;
-            return removeSprintWorktree(true);
-          }
-        }
-        showToast(msg, 'error', 4000);
-      }
-    } catch {
-      showToast('Failed to remove sprint worktree', 'error');
-    } finally {
-      worktreeBusy = false;
-    }
-  }
-
-  async function copyCd() {
-    if (!sprint?.worktree) return;
-    const ok = await copyToClipboard(`cd "${sprint.worktree.path}"`);
-    showToast(ok ? 'Copied cd command' : 'Copy failed', ok ? 'success' : 'error');
-  }
-
-  function runOrchestrate() {
-    if (!sprint) return;
-    // `sprintTickets` is already scoped to this sprint; the prompt helper
-    // filters again but happily accepts a pre-scoped list.
-    runPrompt(orchestrateSprintPrompt(sprint, sprintTickets, users), {
-      cwd: sprint.worktree?.path,
-      label: 'Orchestrate ' + sprint.name,
-    });
-  }
-
-  $: canPlan = !!sprint && !!sprint.goal && sprint.goal.trim().length > 0 && sprint.status === 'planning';
-
-  function runPlan() {
-    if (!sprint || !canPlan) return;
-    runPrompt(sprintBreakdownPrompt(sprint, sprintTickets, users), {
-      cwd: sprint.worktree?.path,
-      label: 'Plan ' + sprint.name,
-    });
-  }
-
-  function commitWithClaude() {
-    if (!sprint) return;
-    runPrompt(commitSprintPrompt(sprint, tickets, users), {
-      cwd: sprint.worktree?.path,
-      label: 'Commit ' + sprint.name,
-    });
-  }
-
   async function assignToSprint(t: Ticket) {
     if (!sprint) return;
     try {
@@ -351,78 +244,27 @@
     ></textarea>
   </div>
 
-  {#if !isCreate && sprint}
+  <!--
+    No worktree card, no orchestrate / plan / commit actions. A sprint frames
+    concurrent work and owns no branch — those all live on the epic now, where
+    there is a goal to plan against and a bounded ticket set to fan out over.
+    The one sprint-level agent action is triage, and it lives in TriagePanel.
+    See docs/branching-model.md.
+  -->
+  {#if !isCreate && sprint && sprint.worktree}
     <div class="wt-card">
       <div class="wt-head">
-        <span class="wt-label">Sprint worktree</span>
-        {#if sprint.worktree}
-          <span class="wt-badge">active</span>
-        {/if}
+        <span class="wt-label">Legacy sprint worktree</span>
       </div>
-      {#if sprint.worktree}
-        <div class="wt-rows">
-          <div class="wt-row"><span class="wt-k">Path</span><span class="wt-v mono">{sprint.worktree.path}</span></div>
-          <div class="wt-row"><span class="wt-k">Branch</span><span class="wt-v mono">{sprint.worktree.branch}</span></div>
-        </div>
-        <div class="wt-actions">
-          <button class="btn" on:click={copyCd} disabled={worktreeBusy}>Copy cd</button>
-          <button class="btn btn-danger" on:click={() => removeSprintWorktree(false)} disabled={worktreeBusy}>Remove worktree</button>
-        </div>
-      {:else}
-        <div class="wt-hint">A dedicated feature branch + checkout for this sprint. New ticket worktrees created after this will branch off the sprint branch. Default: <code>tkxr/sprint/{sprint.id}</code>.</div>
-        <button class="btn btn-primary" on:click={createSprintWorktree} disabled={worktreeBusy}>Create sprint worktree</button>
-      {/if}
-    </div>
-
-    {#if sprint.worktree}
-      <BranchInsights scope="sprint" id={sprint.id} worktreePath={sprint.worktree.path} />
-    {/if}
-
-    <div class="orch-card">
-      <div class="orch-head">
-        <Sparkles size={14} color="var(--ai)" />
-        <span>Plan sprint with Claude</span>
+      <div class="wt-rows">
+        <div class="wt-row"><span class="wt-k">Path</span><span class="wt-v mono">{sprint.worktree.path}</span></div>
+        <div class="wt-row"><span class="wt-k">Branch</span><span class="wt-v mono">{sprint.worktree.branch}</span></div>
       </div>
-      <div class="orch-hint">
-        {#if canPlan}
-          Sends a prompt that asks Claude to research the sprint goal, then create child tickets (with waves via <code>dependsOn</code>). Guardrails: won't touch existing tickets, won't flip statuses, capped at ~12 new tickets.
-        {:else if !sprint.goal || !sprint.goal.trim()}
-          Set a sprint <strong>goal</strong> above to enable planning.
-        {:else if sprint.status !== 'planning'}
-          Only available while the sprint is in <strong>planning</strong>.
-        {/if}
+      <div class="wt-hint">
+        Sprints no longer own branches. This one predates that change and tkxr no
+        longer manages it — remove it by hand with <code>git worktree remove</code>,
+        then <code>git branch -d</code> once its work has landed.
       </div>
-      <button class="orch-btn" on:click={runPlan} disabled={!canPlan}>
-        <Sparkles size={14} color="#fff" />
-        <span>{$claudeAvailable ? 'Plan with Claude' : 'Copy plan prompt'}</span>
-      </button>
-    </div>
-
-    <div class="orch-card">
-      <div class="orch-head">
-        <Sparkles size={14} color="var(--ai)" />
-        <span>Orchestrate this sprint</span>
-      </div>
-      <div class="orch-hint">Copies a prompt that puts Claude Code in orchestrator mode — it fans out one sub-agent per open ticket, then merges each ticket branch into the sprint branch as they finish. {#if !sprint.worktree}Consider creating the sprint worktree first.{/if}</div>
-      <button class="orch-btn" on:click={runOrchestrate}>
-        <Sparkles size={14} color="#fff" />
-        <span>{$claudeAvailable ? 'Run in Claude' : 'Copy prompt'}</span>
-      </button>
-    </div>
-
-    <div class="orch-card">
-      <div class="orch-head">
-        <Sparkles size={14} color="var(--ai)" />
-        <span>Commit sprint work</span>
-      </div>
-      <div class="orch-hint">
-        Runs Claude in {sprint.worktree ? 'the sprint worktree' : 'the repo root'} to stage remaining changes and land Conventional Commits — <code>&lt;type&gt;(&lt;scope&gt;): … ({sprint.id})</code> for integration work, per-ticket ids for ticket-specific work, <code>chore(merge): …</code> for unmerged ticket branches.
-        {#if !sprint.worktree}<br /><em>No sprint worktree — Claude will ask before touching the main checkout.</em>{/if}
-      </div>
-      <button class="orch-btn" on:click={commitWithClaude} title={sprint.worktree ? `Commit in ${sprint.worktree.path}` : 'No sprint worktree — Claude will ask before touching main'}>
-        <Sparkles size={14} color="#fff" />
-        <span>{$claudeAvailable ? 'Commit with Claude' : 'Copy commit prompt'}</span>
-      </button>
     </div>
   {/if}
 
@@ -568,7 +410,7 @@
     font-family: inherit;
   }
   .desc:focus { border-color: var(--accent); }
-  .wt-card, .orch-card {
+  .wt-card {
     background: var(--elevated);
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -577,7 +419,7 @@
     flex-direction: column;
     gap: 10px;
   }
-  .wt-head, .orch-head { display: flex; align-items: center; gap: 8px; }
+  .wt-head { display: flex; align-items: center; gap: 8px; }
   .wt-label {
     font-size: 10.5px;
     font-weight: 600;
@@ -585,15 +427,7 @@
     text-transform: uppercase;
     color: var(--muted);
   }
-  .wt-badge {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 2px 6px;
-    border-radius: 5px;
-    background: rgba(70,193,127,.14);
-    color: #46c17f;
-  }
-  .wt-hint, .orch-hint { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+  .wt-hint { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
   .wt-hint code {
     background: var(--surface);
     border-radius: 4px;
@@ -616,31 +450,6 @@
     font-size: 11.5px;
     color: var(--text2);
     word-break: break-all;
-  }
-  .wt-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-  .orch-head { font-size: 12.5px; font-weight: 600; color: var(--text2); }
-  .orch-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 9px 12px;
-    background: linear-gradient(135deg, #4c8dff, #6b5bff);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    font-size: 12.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity .12s;
-  }
-  .orch-btn:hover:not(:disabled) { opacity: .9; }
-  .orch-btn:disabled { opacity: .45; cursor: not-allowed; }
-  .orch-hint code {
-    background: var(--surface);
-    border-radius: 4px;
-    padding: 1px 4px;
-    font-size: 10.5px;
   }
 
   .burn {
