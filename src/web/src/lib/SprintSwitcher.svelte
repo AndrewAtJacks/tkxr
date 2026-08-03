@@ -86,19 +86,35 @@
     showCompleted = completed.some(s => s.id === activeSprint);
   }
 
-  function ticketCount(id: string): number {
-    return bySprint[id] || 0;
+  /**
+   * Card props are derived here rather than computed by helper functions
+   * called from the template. Svelte tracks the identifiers a template
+   * expression *names*, not what the function it calls reads: `count={n(s.id)}`
+   * only re-evaluates when `s` changes, so cards rendered before the counts
+   * fetch resolved sat at "0 tickets · 0%" until something else moved the
+   * sprint object. These `$:` blocks name `bySprint`/`progress` directly, so
+   * they re-run when the fetch lands.
+   */
+  // Counts are taken as arguments, not closed over, so the `$:` blocks below
+  // name them and Svelte picks them up as dependencies.
+  function toCards(
+    list: Sprint[],
+    counts: Record<string, number>,
+    prog: Record<string, { total: number; done: number; open: number }>,
+  ) {
+    return list.map(s => {
+      const p = prog[s.id];
+      return {
+        sprint: s,
+        count: counts[s.id] || 0,
+        pct: p && p.total > 0 ? Math.round((p.done / p.total) * 100) : 0,
+        // All tickets done but the sprint is still open — the wrap-it-up case.
+        ready: s.status !== 'completed' && !!p && p.total > 0 && p.open === 0,
+      };
+    });
   }
-  function pctDone(id: string): number {
-    const p = progress[id];
-    if (!p || p.total === 0) return 0;
-    return Math.round((p.done / p.total) * 100);
-  }
-  /** All tickets done but the sprint is still open — the wrap-it-up case. */
-  function readyToComplete(s: Sprint): boolean {
-    const p = progress[s.id];
-    return s.status !== 'completed' && !!p && p.total > 0 && p.open === 0;
-  }
+  $: liveCards = toCards(live, bySprint, progress);
+  $: completedCards = toCards(completed, bySprint, progress);
 
   function pick(id: string) {
     dispatch('select', id);
@@ -203,17 +219,17 @@
           </div>
         </button>
       {/if}
-      {#each live as s (s.id)}
+      {#each liveCards as c (c.sprint.id)}
         <SprintCard
-          sprint={s}
-          active={s.id === activeSprint}
-          count={ticketCount(s.id)}
-          pct={pctDone(s.id)}
-          ready={readyToComplete(s)}
-          busy={!!pendingStatus[s.id]}
+          sprint={c.sprint}
+          active={c.sprint.id === activeSprint}
+          count={c.count}
+          pct={c.pct}
+          ready={c.ready}
+          busy={!!pendingStatus[c.sprint.id]}
           statuses={LIFECYCLE}
-          on:select={() => pick(s.id)}
-          on:status={(e) => setStatus(s, e.detail)}
+          on:select={() => pick(c.sprint.id)}
+          on:status={(e) => setStatus(c.sprint, e.detail)}
         />
       {/each}
 
@@ -243,16 +259,16 @@
         </button>
         {#if showCompleted}
           <div class="grid">
-            {#each completed as s (s.id)}
+            {#each completedCards as c (c.sprint.id)}
               <SprintCard
-                sprint={s}
-                active={s.id === activeSprint}
-                count={ticketCount(s.id)}
-                pct={pctDone(s.id)}
-                busy={!!pendingStatus[s.id]}
+                sprint={c.sprint}
+                active={c.sprint.id === activeSprint}
+                count={c.count}
+                pct={c.pct}
+                busy={!!pendingStatus[c.sprint.id]}
                 statuses={LIFECYCLE}
-                on:select={() => pick(s.id)}
-                on:status={(e) => setStatus(s, e.detail)}
+                on:select={() => pick(c.sprint.id)}
+                on:status={(e) => setStatus(c.sprint, e.detail)}
               />
             {/each}
           </div>
