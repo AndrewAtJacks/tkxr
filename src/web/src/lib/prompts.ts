@@ -2,10 +2,11 @@ import type { Epic, Ticket, User, Sprint } from './stores';
 
 const MCP_REMINDER = `Use the tkxr MCP tools if attached (agent_guide, get_ticket, list_tickets, search_tickets, edit_ticket, update_ticket_status, assign_ticket, add_comment, set_ticket_sprint). If a change is warranted, apply it via the MCP tools so the web UI live-refreshes.`;
 
-// Repo-wide convention: every code commit (ticket work, sprint merges, orchestrated
-// integrations) uses Conventional Commits — https://www.conventionalcommits.org/.
-// Shared block so the ticket-work prompt, the "commit with claude" prompt, and the
-// orchestrator all speak the same language.
+// Repo-wide convention: every code commit uses Conventional Commits —
+// https://www.conventionalcommits.org/. Shared block so every prompt that can
+// end in a commit speaks the same language. Committing is the implementer's job
+// on their own ticket branch; there is no agent action that commits on their
+// behalf (docs/branching-model.md).
 export const CONVENTIONAL_COMMIT_GUIDE = [
   `## Commit convention (Conventional Commits — mandatory)`,
   ``,
@@ -37,7 +38,7 @@ export const CONVENTIONAL_COMMIT_GUIDE = [
   `- \`fix(claude-cli): force non-interactive execution (bug-I30c9l0_)\``,
   `- \`chore(merge): tas-abc123 add sprint planner\` (for merge commits)`,
   ``,
-  `Merges (orchestrator + sprint integration): use \`chore(merge): <ticket-id> <short title>\` as the merge subject. Keep \`--no-ff\`.`,
+  `Merges: use \`chore(merge): <ticket-id> <short title>\` as the merge subject — e.g. landing a ticket branch on its epic branch. Keep \`--no-ff\`.`,
 ].join('\n');
 
 // Prepended ONLY when the prompt is spawned into tkxr's server-side runner
