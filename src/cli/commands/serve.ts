@@ -1271,8 +1271,9 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const force = req.query.force === 'true' || req.body?.force === true;
       const keepBranch = req.query.keepBranch === 'true' || req.body?.keepBranch === true;
       let branchKept: string | null = null;
+      let outcome = { alreadyUntracked: false, dirRemains: false };
       try {
-        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
+        outcome = await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
       } catch (err) {
         // Worktree removed, branch declined for unmerged commits — a success
         // with a caveat, not a failure. Anything else is a real error.
@@ -1281,7 +1282,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
       }
       const updated = await storage.updateEpic(id, { worktree: null });
       if (updated) broadcast(wss, { type: 'epic_updated', data: updated });
-      res.json({ epic: updated, removed: wt, branchKept });
+      res.json({ epic: updated, removed: wt, branchKept, ...outcome });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to remove epic worktree' });
     }
@@ -1297,15 +1298,16 @@ export async function startServer(args: ServeArgs): Promise<void> {
       const force = req.query.force === 'true' || req.body?.force === true;
       const keepBranch = req.query.keepBranch === 'true' || req.body?.keepBranch === true;
       let branchKept: string | null = null;
+      let outcome = { alreadyUntracked: false, dirRemains: false };
       try {
-        await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
+        outcome = await removeWorktree({ path: wt.path, branch: wt.branch, force, keepBranch, cwd: originalCwd });
       } catch (err) {
         if (!(err instanceof BranchKeptError)) throw err;
         branchKept = wt.branch;
       }
       const updated = await storage.updateTicket(id, { worktree: null });
       if (updated) broadcast(wss, { type: 'ticket_updated', data: updated });
-      res.json({ ticket: updated, removed: wt, branchKept });
+      res.json({ ticket: updated, removed: wt, branchKept, ...outcome });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to remove worktree' });
     }

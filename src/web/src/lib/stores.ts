@@ -190,6 +190,21 @@ function buildQueryString(q: PagedTicketQuery, cursor: string | null): string {
 }
 
 /**
+ * Append `incoming` to `existing`, keeping one entry per id and preferring the
+ * newer copy of anything already present. Page appends can overlap a row
+ * `applyEvent` injected, so identity has to be by id rather than by position.
+ */
+function mergeById(existing: Ticket[], incoming: Ticket[]): Ticket[] {
+  const byId = new Map(incoming.map(t => [t.id, t]));
+  const merged = existing.map(t => byId.get(t.id) ?? t);
+  const seen = new Set(existing.map(t => t.id));
+  for (const t of incoming) {
+    if (!seen.has(t.id)) merged.push(t);
+  }
+  return merged;
+}
+
+/**
  * Does a ticket match the current UI filter? Mirrors the server's filter
  * predicate closely enough to keep `applyEvent` from showing stale rows. The
  * server is the source of truth — this is a best-effort filter so that WS
@@ -259,7 +274,10 @@ export function createPagedTicketStore(): PagedTicketStore {
       if (seq !== fetchSeq) return; // superseded; drop
       state.update(s => ({
         ...s,
-        items: append ? [...s.items, ...items] : items,
+        // Dedupe on append: `applyEvent` injects a ticket that moved into this
+        // view, and a later page can then legitimately return that same row.
+        // Without this the row would render twice (bug-jJnasGns).
+        items: append ? mergeById(s.items, items) : items,
         nextCursor,
         total,
         loading: false,
@@ -332,10 +350,24 @@ export function createPagedTicketStore(): PagedTicketStore {
           items[idx] = t;
           return { ...s, items };
         }
-        // Ticket wasn't in our page but now matches — could be scrolled below
-        // our current cursor. Don't inject; let the next `fetchNextPage` or
-        // `resetAndFetch` pick it up. Bumping total here would double-count.
-        return s;
+        // Ticket wasn't in this view but now matches — most often a status
+        // change moving it between board columns, since each column is its own
+        // store scoped to one status.
+        //
+        // This used to return unchanged, reasoning that the row might sit below
+        // the current cursor and injecting it could double-count. The cost was
+        // that the ticket vanished: the source column dropped it and the
+        // destination column ignored it, so it was invisible until a manual
+        // refresh (bug-jJnasGns). Dropping a row the user just moved is much
+        // worse than briefly mis-ordering one.
+        //
+        // Safe to inject now that page appends dedupe by id (`mergeById`), so a
+        // later page returning the same row replaces it rather than adding a
+        // second copy. `total` is bumped to match — the server's count for this
+        // query really did go up — and any drift is corrected by the next
+        // fetch, which takes `total` from the response.
+        if (!matches) return s;
+        return { ...s, items: [t, ...s.items], total: s.total + 1 };
       });
     },
 

@@ -13,6 +13,7 @@
   import Columns from './icons/Columns.svelte';
   import List from './icons/List.svelte';
   import Plus from './icons/Plus.svelte';
+  import Edit from './icons/Edit.svelte';
   import Filter from './icons/Filter.svelte';
   import Sun from './icons/Sun.svelte';
   import Moon from './icons/Moon.svelte';
@@ -347,11 +348,18 @@
         on:dragleave={onDragLeave}
         on:drop={onDrop('epic', ep.id)}
       >
+        <!--
+          The name filters the board; editing moved to the small button on the
+          right. It used to be the other way round, which put the rarer action
+          on the bigger target — you pick an epic to look at its tickets far
+          more often than to rename it (tas-StJGUFto).
+        -->
         <button
           class="row-main"
+          class:active={activeEpic === ep.id}
           style="color:{activeEpic === ep.id ? 'var(--text)' : 'var(--muted)'};font-weight:{activeEpic === ep.id ? 600 : 400};background:{activeEpic === ep.id ? 'var(--nav-active)' : 'transparent'}"
-          title="Open epic"
-          on:click={() => openEpicPanel(ep.id)}
+          title={activeEpic === ep.id ? 'Clear epic filter' : 'Filter board to this epic'}
+          on:click={() => toggleEpicFilter(ep.id)}
         >
           <span class="dot" style="background:{ep.color || 'var(--faint)'}"></span>
           <span class="row-label">{ep.name}</span>
@@ -367,11 +375,11 @@
         {/if}
         <button
           class="filter-btn"
-          class:active={activeEpic === ep.id}
-          title={activeEpic === ep.id ? 'Clear epic filter' : 'Filter board to this epic'}
-          on:click={() => toggleEpicFilter(ep.id)}
+          title="Edit epic"
+          aria-label="Edit epic {ep.name}"
+          on:click={() => openEpicPanel(ep.id)}
         >
-          <Filter size={11} />
+          <Edit size={11} />
         </button>
       </div>
     {/each}
