@@ -24,6 +24,7 @@
   import TicketPanel from '../lib/TicketPanel.svelte';
   import SprintPanel from '../lib/SprintPanel.svelte';
   import SprintSwitcher from '../lib/SprintSwitcher.svelte';
+  import SprintCompletePrompt from '../lib/SprintCompletePrompt.svelte';
   import EpicPanel from '../lib/EpicPanel.svelte';
   import UserPanel from '../lib/UserPanel.svelte';
   import TriagePanel from '../lib/TriagePanel.svelte';
@@ -31,6 +32,7 @@
   import CommandPalette from '../lib/CommandPalette.svelte';
   import Toaster from '../lib/Toaster.svelte';
   import { normalizeTicket } from '../lib/util';
+  import { showToast } from '../lib/clipboard';
 
   type Panel = null | 'ticket' | 'sprint' | 'epic' | 'user' | 'triage';
   let view: 'board' | 'list' = 'board';
@@ -263,9 +265,13 @@
           // bus (with 500ms coalescing), so nothing to do for that here.
           if (m.type === 'ticket_created' || m.type === 'ticket_updated' || m.type === 'ticket_deleted') {
             pagedTickets.applyEvent(m);
-            // The burn strip reads its own scoped slice, so it isn't covered by
-            // `applyEvent` — re-sum it whenever ticket data moves.
-            if (activeSprint && !isUnsorted) fetchBurn(activeSprint);
+            // The burn strip and the completion counts read their own scoped
+            // slices, so neither is covered by `applyEvent` — re-sum them
+            // whenever ticket data moves.
+            if (activeSprint && !isUnsorted) {
+              fetchBurn(activeSprint);
+              fetchSprintCounts(activeSprint);
+            }
             return;
           }
           // Sprint/user events still trigger the bulk reference-data refresh
@@ -390,6 +396,110 @@
   $: if (browser) {
     if (!activeSprint || isUnsorted) burn = null;
     else fetchBurn(activeSprint);
+  }
+
+  // --- Sprint completion prompt --------------------------------------------
+  // Ticket counts for the active workspace, exact rather than sampled: `burn`
+  // above reads a 200-capped slice, which is fine for a progress bar but would
+  // silently declare a big sprint finished. The scoped summary endpoint counts
+  // server-side over every ticket.
+  let sprintCounts: { total: number; done: number } | null = null;
+  let sprintCountsAbort: AbortController | null = null;
+
+  async function fetchSprintCounts(sprintId: string) {
+    if (sprintCountsAbort) sprintCountsAbort.abort();
+    const ac = new AbortController();
+    sprintCountsAbort = ac;
+    try {
+      const res = await fetch(`/api/tickets/summary?sprint=${encodeURIComponent(sprintId)}`, { signal: ac.signal });
+      if (!res.ok) return;
+      const j = await res.json();
+      sprintCounts = { total: j.counts?.total || 0, done: j.byStatus?.done || 0 };
+    } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
+      // noop — prompt just doesn't re-evaluate this round
+    } finally {
+      if (sprintCountsAbort === ac) sprintCountsAbort = null;
+    }
+  }
+
+  $: if (browser) {
+    if (!activeSprint || isUnsorted) sprintCounts = null;
+    else fetchSprintCounts(activeSprint);
+  }
+
+  // Dismissals are per sprint and survive reloads — the prompt should be
+  // answerable once, not on every visit to a finished board.
+  const COMPLETE_DISMISS_KEY = 'tkxr-sprint-complete-dismissed';
+  let dismissedComplete: string[] = [];
+  if (browser) {
+    try {
+      const raw = localStorage.getItem(COMPLETE_DISMISS_KEY);
+      if (raw) dismissedComplete = JSON.parse(raw) || [];
+    } catch { /* noop */ }
+  }
+  function persistDismissed() {
+    if (!browser) return;
+    try { localStorage.setItem(COMPLETE_DISMISS_KEY, JSON.stringify(dismissedComplete)); } catch { /* noop */ }
+  }
+
+  $: sprintReady = !!workspaceSprint
+    && workspaceSprint.status !== 'completed'
+    && !!sprintCounts
+    && sprintCounts.total > 0
+    && sprintCounts.done === sprintCounts.total;
+
+  // Clear a stale dismissal once the workspace stops being finished, so that
+  // adding and finishing more work prompts again instead of staying silent
+  // forever after one "Not yet".
+  $: if (browser && workspaceSprint && !sprintReady && dismissedComplete.includes(workspaceSprint.id)) {
+    dismissedComplete = dismissedComplete.filter(id => id !== workspaceSprint!.id);
+    persistDismissed();
+  }
+
+  // Suppressed while a side panel is open — the prompt lives in the same
+  // bottom-right corner the panel occupies.
+  $: showCompletePrompt = sprintReady && !!workspaceSprint
+    && !dismissedComplete.includes(workspaceSprint.id)
+    && panel === null
+    && !showWorkspacePicker
+    && $activeRunId === null;
+
+  // Epics under this workspace that would roll up with the sprint.
+  $: openWorkspaceEpics = workspaceEpics.filter(e => e.status !== 'completed').length;
+
+  let completingSprint = false;
+
+  async function completeActiveSprint() {
+    if (!workspaceSprint || completingSprint) return;
+    const id = workspaceSprint.id;
+    completingSprint = true;
+    try {
+      const res = await fetch(`/api/sprints/${id}/complete`, { method: 'POST' });
+      if (res.ok) {
+        const j = await res.json();
+        const rolled = (j.completedEpicIds || []).length;
+        showToast(
+          rolled > 0
+            ? `Sprint completed · ${rolled} epic${rolled === 1 ? '' : 's'} rolled up`
+            : 'Sprint completed',
+          'success',
+        );
+        await reload();
+      } else {
+        showToast('Could not complete sprint', 'error');
+      }
+    } catch {
+      showToast('Could not complete sprint', 'error');
+    } finally {
+      completingSprint = false;
+    }
+  }
+
+  function dismissCompletePrompt() {
+    if (!workspaceSprint) return;
+    dismissedComplete = [...dismissedComplete, workspaceSprint.id];
+    persistDismissed();
   }
 
   // Triage findings count (rough, drives sidebar pill).
@@ -662,6 +772,23 @@
 <WorkspacePanel open={$activeRunId !== null} on:close={() => activeRunId.set(null)}>
   <ClaudeRunPanel on:close={() => activeRunId.set(null)} />
 </WorkspacePanel>
+
+<!--
+  Sprint completion prompt — fires on the board once every ticket in the active
+  workspace is done. Sits outside `.app` so it can anchor to the viewport corner
+  without the board's overflow clipping it.
+-->
+{#if showCompletePrompt && workspaceSprint && sprintCounts}
+  <SprintCompletePrompt
+    sprint={workspaceSprint}
+    done={sprintCounts.done}
+    total={sprintCounts.total}
+    openEpics={openWorkspaceEpics}
+    busy={completingSprint}
+    on:complete={completeActiveSprint}
+    on:dismiss={dismissCompletePrompt}
+  />
+{/if}
 
 <Toaster />
 

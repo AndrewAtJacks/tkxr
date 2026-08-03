@@ -225,6 +225,14 @@ export class ProjectStorage {
   async updateSprintStatus(id: string, status: Sprint['status']): Promise<Sprint | null> {
     // Route through updateSprint so status-transition hooks (e.g. auto-close worktree on
     // completed) fire consistently across all paths.
+    //
+    // `completed` goes through completeSprint so the epic rollup happens no
+    // matter which entry point moved the sprint. Callers that need the list of
+    // epics it touched (to broadcast them) should call completeSprint directly.
+    if (status === 'completed') {
+      const result = await this.completeSprint(id);
+      return result ? result.sprint : null;
+    }
     return this.updateSprint(id, { status });
   }
 
@@ -242,6 +250,53 @@ export class ProjectStorage {
     // `tkxr worktree remove <sprint-id>`.
 
     return sprint;
+  }
+
+  /**
+   * Close a sprint out: mark it `completed` and roll every epic under it to
+   * `completed` too. Epic status is a manual label that lags its tickets, so
+   * without the rollup a finished workspace ends up as a completed sprint full
+   * of "active" epics. Returns the sprint plus only the epics this call
+   * actually moved, so callers can broadcast/report precisely. Null when the
+   * sprint doesn't exist.
+   */
+  async completeSprint(id: string): Promise<{ sprint: Sprint; epics: Epic[] } | null> {
+    const sprint = await this.updateSprint(id, { status: 'completed' });
+    if (!sprint) return null;
+
+    const epics = await this.getEpics();
+    const rolled = epics.filter(e => e.sprint === id && e.status !== 'completed');
+    if (rolled.length > 0) {
+      const now = new Date();
+      for (const e of rolled) {
+        e.status = 'completed';
+        e.updatedAt = now;
+      }
+      await fs.writeFile(this.epicsPath, JSON.stringify(epics, null, 2), 'utf8');
+    }
+
+    return { sprint, epics: rolled };
+  }
+
+  /**
+   * Per-sprint done/open ticket tallies, keyed by sprint id with `none` for the
+   * sprintless bucket. Backs the "is this workspace finished?" question in both
+   * the switcher cards and the completion prompt — neither can use a paged
+   * client slice without under-counting.
+   */
+  async getSprintProgress(): Promise<Record<string, { total: number; done: number; open: number }>> {
+    const tickets = await this.getAllTickets();
+    const progress: Record<string, { total: number; done: number; open: number }> = {
+      none: { total: 0, done: 0, open: 0 },
+    };
+    for (const t of tickets) {
+      const key = t.sprint || 'none';
+      if (!progress[key]) progress[key] = { total: 0, done: 0, open: 0 };
+      progress[key].total++;
+      if (t.status === 'done') progress[key].done++;
+      else progress[key].open++;
+    }
+    return progress;
   }
 
   async deleteSprint(sprintId: string): Promise<{ ok: boolean; sweptTickets: Ticket[]; sweptEpics: Epic[] }> {

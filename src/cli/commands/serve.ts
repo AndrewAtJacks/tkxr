@@ -338,10 +338,21 @@ export async function startServer(args: ServeArgs): Promise<void> {
 
       // Project-wide sprint buckets for the workspace picker — deliberately
       // computed over `all`, not the scoped slice.
+      //
+      // `bySprint` stays a flat count (existing consumers read it as a number);
+      // `sprintProgress` carries the done/open split the switcher cards and the
+      // sprint-completion prompt need alongside it.
       const bySprint: Record<string, number> = { none: 0 };
+      const sprintProgress: Record<string, { total: number; done: number; open: number }> = {
+        none: { total: 0, done: 0, open: 0 },
+      };
       for (const t of all) {
         const key = t.sprint || 'none';
         bySprint[key] = (bySprint[key] || 0) + 1;
+        if (!sprintProgress[key]) sprintProgress[key] = { total: 0, done: 0, open: 0 };
+        sprintProgress[key].total++;
+        if (t.status === 'done') sprintProgress[key].done++;
+        else sprintProgress[key].open++;
       }
 
       const total = tickets.length;
@@ -354,7 +365,7 @@ export async function startServer(args: ServeArgs): Promise<void> {
 
       const points = { total: pointsTotal, done: pointsDone };
 
-      res.json({ counts, triage, byStatus, byEpic, byAssignee, bySprint, points, pointsByEpic });
+      res.json({ counts, triage, byStatus, byEpic, byAssignee, bySprint, sprintProgress, points, pointsByEpic });
     } catch (error) {
       res.status(500).json({ error: 'Failed to load ticket summary' });
     }
@@ -802,15 +813,37 @@ export async function startServer(args: ServeArgs): Promise<void> {
       if (startDate !== undefined) updates.startDate = startDate ? new Date(startDate) : undefined;
       if (endDate !== undefined) updates.endDate = endDate ? new Date(endDate) : undefined;
 
-      const sprint = await storage.updateSprint(id, updates);
+      // A patch that moves the sprint to `completed` gets the same epic rollup
+      // as the dedicated complete route below — SprintPanel's lifecycle control
+      // comes through here, and it shouldn't behave differently from the
+      // switcher's.
+      const completing = updates.status === 'completed';
+      if (completing) delete updates.status;
+
+      let sprint = Object.keys(updates).length > 0
+        ? await storage.updateSprint(id, updates)
+        : (await storage.getSprints()).find(s => s.id === id) || null;
 
       if (!sprint) {
         return res.status(404).json({ error: 'Sprint not found' });
       }
 
+      let completedEpicIds: string[] = [];
+      if (completing) {
+        const result = await storage.completeSprint(id);
+        if (!result) {
+          return res.status(404).json({ error: 'Sprint not found' });
+        }
+        sprint = result.sprint;
+        completedEpicIds = result.epics.map(e => e.id);
+        for (const e of result.epics) {
+          broadcast(wss, { type: 'epic_updated', data: e });
+        }
+      }
+
       broadcast(wss, { type: 'sprint_updated', data: sprint });
 
-      res.json(sprint);
+      res.json(completing ? { ...sprint, completedEpicIds } : sprint);
     } catch (error) {
       res.status(500).json({ error: 'Failed to update sprint' });
     }
@@ -849,15 +882,59 @@ export async function startServer(args: ServeArgs): Promise<void> {
         return res.status(400).json({ error: 'Invalid status. Must be planning, active, or completed' });
       }
 
+      // `completed` carries the epic rollup (storage.completeSprint); calling
+      // it directly rather than through updateSprintStatus is what gets us the
+      // epic list to broadcast.
+      if (status === 'completed') {
+        const result = await storage.completeSprint(id);
+        if (!result) {
+          return res.status(404).json({ error: 'Sprint not found' });
+        }
+        broadcast(wss, { type: 'sprint_updated', data: result.sprint });
+        for (const e of result.epics) {
+          broadcast(wss, { type: 'epic_updated', data: e });
+        }
+        return res.json({ ...result.sprint, completedEpicIds: result.epics.map(e => e.id) });
+      }
+
       const sprint = await storage.updateSprintStatus(id, status);
-      
+
       if (!sprint) {
         return res.status(404).json({ error: 'Sprint not found' });
       }
 
+      // This route used to skip the broadcast that `PUT /api/sprints/:id` does,
+      // so a status change from the switcher never reached other open boards —
+      // the card kept its old colour until a manual reload.
+      broadcast(wss, { type: 'sprint_updated', data: sprint });
+
       res.json(sprint);
     } catch (error) {
       res.status(500).json({ error: 'Failed to update sprint status' });
+    }
+  });
+
+  // Close a sprint out in one call: status → `completed`, plus every epic under
+  // it. Separate from the status route because the epic rollup is the whole
+  // point — the completion prompt fires when a workspace's tickets are all done,
+  // and leaving its epics "active" behind a completed sprint reads as a bug.
+  app.post('/api/sprints/:id/complete', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const result = await storage.completeSprint(id);
+
+      if (!result) {
+        return res.status(404).json({ error: 'Sprint not found' });
+      }
+
+      broadcast(wss, { type: 'sprint_updated', data: result.sprint });
+      for (const e of result.epics) {
+        broadcast(wss, { type: 'epic_updated', data: e });
+      }
+
+      res.json({ sprint: result.sprint, completedEpicIds: result.epics.map(e => e.id) });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to complete sprint' });
     }
   });
 
