@@ -2,61 +2,6 @@
 
 ## [Unreleased]
 
-### Changed
-- **Clicking an epic in the sidebar filters the board.** Editing moved
-  to a small pencil button on the right of the row. It used to be the
-  other way round, which put the rarer action on the bigger target —
-  you pick an epic to look at its tickets far more often than to rename
-  it (tas-StJGUFto).
-- **Long comments collapse by default.** A comment over 12 lines or 900
-  characters shows its opening few lines plus a "Show more" toggle that
-  says how much is hidden. Agent comments routinely run to hundreds of
-  lines and buried the conversation; anything a human typically types is
-  untouched (tas-YerLNB5a).
-
-### Fixed
-- **A ticket moved between board columns no longer disappears.** Each
-  board column is its own paged store scoped to one status, so a status
-  change is two events: the source column drops the row, and the
-  destination column was ignoring it because the ticket wasn't already
-  in its page. The ticket vanished from the board entirely until a
-  manual refresh. The destination column now injects it, which is safe
-  because page appends dedupe by id — a later page returning the same
-  row replaces it instead of adding a second copy (bug-jJnasGns).
-- **A successful worktree removal no longer prunes other half-removed
-  worktrees.** `git worktree prune` is repo-global, so the prune that
-  ran after every successful removal swept the admin entry of any
-  worktree whose `.git` file was missing — turning a partial failure
-  that `git worktree repair` could still fix into an unrecoverable
-  orphan. That is the same outcome bug-MtPFb7dg was filed for, reached
-  by a different route. There is now no prune at all: `git worktree
-  remove` already clears its own entry on success, and on failure the
-  entry has to survive so the removal can be retried or repaired
-  (bug-NGyF3rA_).
-- **A worktree record can be cleared once git has forgotten the path.**
-  Removal shelled out to `git worktree remove` unconditionally, so if
-  git no longer tracked the path the command failed with "is not a
-  working tree" and the record survived — on every surface, on every
-  retry, with no way out but editing the store by hand. Removal now
-  checks whether git tracks the path first and treats "it doesn't" as
-  the end state already holding: the record is cleared and the response
-  says so via `alreadyUntracked`, plus `dirRemains` when the directory
-  is still on disk and only the user can delete it (bug-6Kx3khqN).
-- **Panel edits inside the save debounce are no longer dropped.**
-  `schedulePatch` cleared its pending timer and re-armed it closed over
-  its *own* patch, so two field edits within 300ms sent only the second
-  — while both had already been applied locally, so the panel showed the
-  lost edit as saved until a reload silently reverted it. Patches now
-  coalesce into one pending object, and a failed send folds its fields
-  back so the next edit retries them. Fixed in `EpicPanel`,
-  `SprintPanel` and `TicketPanel`, which all shared the shape
-  (bug-7bVl3-Kj).
-
-Sprints change role: a sprint now frames the whole workspace instead of
-being one grouping among many, and **epics** take over the job of
-grouping tickets inside it. This changes what you see on first load —
-see the migration note under _Changed_.
-
 ### Added
 - **Epic entity (`epi-*`).** New top-level record in `tkxr/epics.json`
   with `name`, `description`, `goal`, `color`, `status`
@@ -125,6 +70,17 @@ see the migration note under _Changed_.
   tickets into epics (capped at 5, no status/priority changes).
 
 ### Changed
+- **Clicking an epic in the sidebar filters the board.** Editing moved
+  to a small pencil button on the right of the row. It used to be the
+  other way round, which put the rarer action on the bigger target —
+  you pick an epic to look at its tickets far more often than to rename
+  it (tas-StJGUFto).
+- **Long comments collapse by default.** A comment over 12 lines or 900
+  characters shows its opening few lines plus a "Show more" toggle that
+  says how much is hidden. Agent comments routinely run to hundreds of
+  lines and buried the conversation; anything a human typically types is
+  untouched (tas-YerLNB5a).
+
 - **A sprint is now required to enter the board.** With no active
   workspace you land on the switcher instead of an unscoped ticket
   list, and the board, sidebar counts and `/api/tickets/summary` are
@@ -215,7 +171,53 @@ see the migration note under _Changed_.
   still prints it, and `git worktree remove` cleans one up. Rationale and
   the tradeoff this accepts: `docs/branching-model.md`.
 
+- `commitTicketPrompt` (ticket-level "Commit with Claude"). Committing belongs
+  to the implementer before the ticket reaches review; the sprint-level
+  `commitSprintPrompt` is unchanged.
+
 ### Fixed
+- **A ticket moved between board columns no longer disappears.** Each
+  board column is its own paged store scoped to one status, so a status
+  change is two events: the source column drops the row, and the
+  destination column was ignoring it because the ticket wasn't already
+  in its page. The ticket vanished from the board entirely until a
+  manual refresh. The destination column now injects it, which is safe
+  because page appends dedupe by id — a later page returning the same
+  row replaces it instead of adding a second copy (bug-jJnasGns).
+- **A successful worktree removal no longer prunes other half-removed
+  worktrees.** `git worktree prune` is repo-global, so the prune that
+  ran after every successful removal swept the admin entry of any
+  worktree whose `.git` file was missing — turning a partial failure
+  that `git worktree repair` could still fix into an unrecoverable
+  orphan. That is the same outcome bug-MtPFb7dg was filed for, reached
+  by a different route. There is now no prune at all: `git worktree
+  remove` already clears its own entry on success, and on failure the
+  entry has to survive so the removal can be retried or repaired
+  (bug-NGyF3rA_).
+- **A worktree record can be cleared once git has forgotten the path.**
+  Removal shelled out to `git worktree remove` unconditionally, so if
+  git no longer tracked the path the command failed with "is not a
+  working tree" and the record survived — on every surface, on every
+  retry, with no way out but editing the store by hand. Removal now
+  checks whether git tracks the path first and treats "it doesn't" as
+  the end state already holding: the record is cleared and the response
+  says so via `alreadyUntracked`, plus `dirRemains` when the directory
+  is still on disk and only the user can delete it (bug-6Kx3khqN).
+- **Panel edits inside the save debounce are no longer dropped.**
+  `schedulePatch` cleared its pending timer and re-armed it closed over
+  its *own* patch, so two field edits within 300ms sent only the second
+  — while both had already been applied locally, so the panel showed the
+  lost edit as saved until a reload silently reverted it. Patches now
+  coalesce into one pending object, and a failed send folds its fields
+  back so the next edit retries them. Fixed in `EpicPanel`,
+  `SprintPanel` and `TicketPanel`, which all shared the shape
+  (bug-7bVl3-Kj).
+
+Sprints change role: a sprint now frames the whole workspace instead of
+being one grouping among many, and **epics** take over the job of
+grouping tickets inside it. This changes what you see on first load —
+see the migration note under _Changed_.
+
 - **CLI notifications 404'd for three mutations.** `notifier` called
   `/api/cli-notifications/{sprint-deleted,user-updated,user-deleted}`,
   which `serve.ts` never registered — so `tkxr delete <spr-*>`,
@@ -235,11 +237,6 @@ see the migration note under _Changed_.
 - **`tkxr list -v` printed the version instead of a verbose listing.**
   The global version flag swallowed `-v` before subcommands saw it.
   `-v` is now the version alias only for a bare `tkxr -v`.
-
-### Removed
-- `commitTicketPrompt` (ticket-level "Commit with Claude"). Committing belongs
-  to the implementer before the ticket reaches review; the sprint-level
-  `commitSprintPrompt` is unchanged.
 
 ## [2.1.4] - 2026-07-16
 ### Changed
