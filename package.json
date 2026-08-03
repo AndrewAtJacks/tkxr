@@ -13,11 +13,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TheLeggestOne/tkxr.git"
+    "url": "git+https://github.com/AndrewAtJacks/tkxr.git"
   },
-  "homepage": "https://github.com/TheLeggestOne/tkxr#readme",
+  "homepage": "https://github.com/AndrewAtJacks/tkxr#readme",
   "bugs": {
-    "url": "https://github.com/TheLeggestOne/tkxr/issues"
+    "url": "https://github.com/AndrewAtJacks/tkxr/issues"
   },
   "type": "module",
   "main": "./dist/index.js",
