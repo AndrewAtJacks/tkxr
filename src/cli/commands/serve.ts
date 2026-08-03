@@ -1625,6 +1625,15 @@ export async function startServer(args: ServeArgs): Promise<void> {
   });
 
   // AI endpoints (stubs — return deterministic scaffolding until wired to a model)
+  //
+  // Consumer note: of these, only `/api/ai/create` has an in-app caller
+  // (CommandPalette). `/api/ai/triage` and `/api/ai/plan` are external/agent
+  // surfaces — the web client computes its triage findings client-side in
+  // TriagePanel, and hands planning to the Claude runner via a prompt, which
+  // produces a real breakdown rather than a scaffolded one. They are kept and
+  // maintained alongside the data model, but editing them moves nothing in the
+  // UI: if a triage or planning behaviour looks wrong in the app, TriagePanel
+  // and `prompts.ts` are where it actually lives.
   const AI_UNAVAILABLE = 'AI backend not configured. This is a stub response.';
 
   app.post('/api/ai/ask', async (req, res) => {
