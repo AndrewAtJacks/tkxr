@@ -98,20 +98,35 @@
     };
   });
 
+  // Coalesce into one pending patch rather than replacing it. Each call used to
+  // clear the timer and re-arm it closed over its *own* patch, so two edits
+  // inside the 300ms window sent only the second — while `Object.assign` had
+  // already applied both locally, so the panel showed the lost one as saved
+  // until a reload silently reverted it (bug-7bVl3-Kj).
+  let pending: any = {};
+
   function schedulePatch(patch: any) {
     if (!sprint || isCreate) return;
     Object.assign(sprint, patch);
     sprint = { ...sprint };
+    Object.assign(pending, patch);
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = window.setTimeout(async () => {
+      const body = pending;
+      pending = {};
       try {
         const res = await fetch(`/api/sprints/${sprint!.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patch),
+          body: JSON.stringify(body),
         });
         if (res.ok) dispatch('reload');
-      } catch { /* noop */ }
+        // Failed send: fold the fields back in so the next edit retries them.
+        // Anything edited since wins, hence `pending` last.
+        else pending = { ...body, ...pending };
+      } catch {
+        pending = { ...body, ...pending };
+      }
     }, 300);
   }
 
