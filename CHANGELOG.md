@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-08-03
+
 ### Fixed
 - **New tickets no longer vanish behind the board's own filters**
   (bug-C7mpZAvb). A ticket created from the New button or a column's
