@@ -43,16 +43,15 @@ see the migration note under _Changed_.
   `create_ticket` / `edit_ticket` and resolved by `get_ticket`.
 - **Epic worktrees.** `tkxr worktree create|remove <epi-*>` creates
   `../<repo>-worktrees/epics/<epic-id>` on `tkxr/epic/<epic-id>`, based
-  on the sprint branch when the epic's workspace has a worktree, else
-  `HEAD`. `Epic` gains a `worktree` field. Exposed as
+  on `HEAD` — this is the feature branch its tickets merge into. `Epic`
+  gains a `worktree` field. Exposed as
   `POST`/`DELETE /api/epics/:id/worktree` and the
-  `create_epic_worktree` / `remove_epic_worktree` MCP tools;
-  `remove_sprint_worktree` is now documented alongside them.
+  `create_epic_worktree` / `remove_epic_worktree` MCP tools.
 - **Per-epic branch insights + PR flow.** `GET /api/epics/:id/git` and
-  `POST /api/epics/:id/pr`, mirroring the ticket and sprint routes. An
-  epic PRs into its sprint branch when the workspace has a worktree,
-  otherwise the repo default. `EpicPanel` renders the worktree card and
-  `BranchInsights` for it.
+  `POST /api/epics/:id/pr`, mirroring the ticket routes. An
+  epic PRs into the repo default — the epic branch *is* the feature
+  branch. `EpicPanel` renders the worktree card and `BranchInsights`
+  for it.
 - **Plan epic with Claude.** `EpicPanel` action mirroring the sprint
   planner: turns the epic's goal into child tickets in waves via
   `dependsOn`, capped at ~12 and forbidden from touching existing
@@ -74,21 +73,6 @@ see the migration note under _Changed_.
 - **Group the backlog into epics.** The triage panel's ungrouped-backlog
   finding now offers a Claude hand-off that buckets loose backlog
   tickets into epics (capped at 5, no status/priority changes).
-
-### Removed
-- **Sprint-level branches and orchestration.** A sprint frames concurrent
-  work; an epic is the thing that maps to a feature branch. Sprints no
-  longer own a branch or a worktree, and the only sprint-level activity
-  left is triage — sorting a sprint's tickets into epics. Removed:
-  `tkxr worktree create|remove <spr-*>`, `POST`/`DELETE
-  /api/sprints/:id/worktree`, `GET /api/sprints/:id/git`,
-  `POST /api/sprints/:id/pr`, the `create_sprint_worktree` /
-  `remove_sprint_worktree` MCP tools, and the sprint orchestrate /
-  commit / plan actions with their prompts. The epic equivalents already
-  exist. `Sprint.worktree` stays in the type as read-only legacy so
-  pre-existing records don't silently lose the path — `tkxr show <spr-*>`
-  still prints it, and `git worktree remove` cleans one up. Rationale and
-  the tradeoff this accepts: `docs/branching-model.md`.
 
 ### Changed
 - **A sprint is now required to enter the board.** With no active
@@ -121,25 +105,10 @@ see the migration note under _Changed_.
   epics and sprints. It never did for any of them, so the only way to
   find where an entity's branch lived was `tkxr worktree list` plus
   guesswork about which directory belonged to what.
-- **The three worktree surfaces report the same shape.** Adding epic
-  worktrees left the sprint ones a level behind, so which entity you
-  asked about changed what you got back. Now every
+- **Both worktree surfaces report the same shape.** Every
   `create_*_worktree` (CLI, REST, MCP) resolves and reports `basedOn`,
-  every `remove_*_worktree` reports `branchKept`, and
-  `remove_sprint_worktree` documents the never-discard-unmerged-work
-  guarantee its two siblings already advertised — the handler always
-  honoured it, only the description omitted it. `tkxr worktree create
-  <spr-*>` also prints its base and says what will branch off it, the
-  way the ticket and epic forms do.
-- **The sprint orchestrator prompt caught up with both worktree
-  changes.** It told every sub-agent that `create_worktree` bases on
-  the sprint branch (untrue once a ticket's epic has a worktree) and
-  that moving a ticket to `done` auto-removes its worktree (untrue
-  since worktree removal became explicit). It now names the real base
-  order, points at `remove_worktree`, and warns that merging a
-  ticket branch forked from an epic branch brings the whole epic
-  branch with it — merge the epic branch instead. Same caveat added
-  to the sprint commit prompt.
+  and every `remove_*_worktree` reports `branchKept`, so which entity
+  you asked about no longer changes what you get back.
 - **Epic `color` is validated** on every write path (REST, MCP, CLI) —
   it's interpolated into an inline `style`, and an unconstrained string
   let extra declarations ride along. Hex literals only, enforced in
@@ -167,6 +136,21 @@ see the migration note under _Changed_.
   epic exists so the target is always reachable.
 - `--goal` and `--color` on `tkxr create epic` are documented in
   `--help` and the README, and echoed back on create.
+
+### Removed
+- **Sprint-level branches and orchestration.** A sprint frames concurrent
+  work; an epic is the thing that maps to a feature branch. Sprints no
+  longer own a branch or a worktree, and the only sprint-level activity
+  left is triage — sorting a sprint's tickets into epics. Removed:
+  `tkxr worktree create|remove <spr-*>`, `POST`/`DELETE
+  /api/sprints/:id/worktree`, `GET /api/sprints/:id/git`,
+  `POST /api/sprints/:id/pr`, the `create_sprint_worktree` /
+  `remove_sprint_worktree` MCP tools, and the sprint orchestrate /
+  commit / plan actions with their prompts. The epic equivalents already
+  exist. `Sprint.worktree` stays in the type as read-only legacy so
+  pre-existing records don't silently lose the path — `tkxr show <spr-*>`
+  still prints it, and `git worktree remove` cleans one up. Rationale and
+  the tradeoff this accepts: `docs/branching-model.md`.
 
 ### Fixed
 - **CLI notifications 404'd for three mutations.** `notifier` called
