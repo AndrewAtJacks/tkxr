@@ -49,10 +49,17 @@
 
   async function setSprint(v: string) {
     const target = v || null;
+    // The select is one-way bound to `draft.sprint`, so the optimistic write is
+    // what keeps it on the picked option while the move is in flight. Nothing
+    // moved if the request fails, so put it back — otherwise the panel claims a
+    // workspace the epic isn't in until it's closed and reopened.
+    const prevSprint = draft.sprint;
     draft.sprint = v || undefined;
     if (isCreate || !epic) return;
 
     if (!moveTicketsWithEpic || scoped.length === 0) {
+      // `schedulePatch` keeps failed fields in `pending` and retries them on the
+      // next edit, so its own optimism is deliberate — leave it alone.
       schedulePatch({ sprint: target });
       return;
     }
@@ -74,9 +81,11 @@
         await fetchEpicTickets();
         dispatch('reload');
       } else {
+        draft.sprint = prevSprint;
         showToast(j.error?.message || 'Failed to move the epic', 'error', 4000);
       }
     } catch {
+      draft.sprint = prevSprint;
       showToast('Failed to move the epic', 'error');
     } finally {
       sprintMoveBusy = false;
