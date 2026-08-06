@@ -38,9 +38,49 @@
 
   // Moving an epic between workspaces. `''` maps to the Unsorted workspace
   // (no sprint), which the server stores as an absent `sprint` field.
-  function setSprint(v: string) {
+  //
+  // Patching `epic.sprint` alone moves the record and leaves its tickets in the
+  // old workspace — the epic then renders under a sprint holding none of its
+  // work. So by default the tickets come along, via the bulk move endpoint
+  // (which re-parents the epic itself as part of the same call). Unticking the
+  // box is the deliberate "just re-file the epic" case (tas-vEpBfx0t).
+  let moveTicketsWithEpic = true;
+  let sprintMoveBusy = false;
+
+  async function setSprint(v: string) {
+    const target = v || null;
     draft.sprint = v || undefined;
-    if (!isCreate) schedulePatch({ sprint: v || null });
+    if (isCreate || !epic) return;
+
+    if (!moveTicketsWithEpic || scoped.length === 0) {
+      schedulePatch({ sprint: target });
+      return;
+    }
+
+    sprintMoveBusy = true;
+    try {
+      const res = await fetch('/api/tickets/bulk/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromEpic: epic.id, toSprint: target, moveEpic: true }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (j.epic) epic = j.epic;
+        const label = target === null
+          ? 'Unsorted'
+          : (sprints.find(s => s.id === target)?.name || 'the target sprint');
+        showToast(`Epic and ${j.moved} ticket${j.moved === 1 ? '' : 's'} moved to ${label}`, 'success');
+        await fetchEpicTickets();
+        dispatch('reload');
+      } else {
+        showToast(j.error?.message || 'Failed to move the epic', 'error', 4000);
+      }
+    } catch {
+      showToast('Failed to move the epic', 'error');
+    } finally {
+      sprintMoveBusy = false;
+    }
   }
 
   // The board's ticket store is workspace-scoped, epic-filtered and paged, so
@@ -303,16 +343,25 @@
     </select>
 
     <span class="label">Sprint</span>
-    <select
-      class="input"
-      value={draft.sprint || ''}
-      on:change={(e) => setSprint(e.currentTarget.value)}
-    >
-      <option value="">Unsorted (no sprint)</option>
-      {#each sprints as s (s.id)}
-        <option value={s.id}>{s.name}</option>
-      {/each}
-    </select>
+    <div class="sprint-field">
+      <select
+        class="input"
+        value={draft.sprint || ''}
+        disabled={sprintMoveBusy}
+        on:change={(e) => setSprint(e.currentTarget.value)}
+      >
+        <option value="">Unsorted (no sprint)</option>
+        {#each sprints as s (s.id)}
+          <option value={s.id}>{s.name}</option>
+        {/each}
+      </select>
+      {#if !isCreate && scoped.length > 0}
+        <label class="with-tickets">
+          <input type="checkbox" bind:checked={moveTicketsWithEpic} />
+          <span>Move its {scoped.length} ticket{scoped.length === 1 ? '' : 's'} too</span>
+        </label>
+      {/if}
+    </div>
 
     <span class="label">Color</span>
     <div class="colors">
@@ -464,6 +513,16 @@
     padding: 8px 10px; font-size: 12.5px; color: var(--text); outline: none; width: 100%; box-sizing: border-box;
   }
   .input:focus { border-color: var(--accent); }
+  .input:disabled { opacity: .6; }
+  .sprint-field { display: flex; flex-direction: column; gap: 6px; }
+  .with-tickets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    cursor: pointer;
+  }
   .colors { display: flex; gap: 6px; flex-wrap: wrap; }
   .swatch {
     width: 22px; height: 22px; border-radius: 6px; border: 2px solid transparent; cursor: pointer; padding: 0;

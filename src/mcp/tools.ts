@@ -118,6 +118,22 @@ mutate the project state without shelling out.
   the row from every board view instead of surfacing an error.
 - \`add_comment\` — thread a comment. Author must be a User id or a resolvable username.
 - \`create_sprint\` / \`edit_sprint\` / \`update_sprint_status\` — sprint lifecycle.
+- \`migrate_tickets\` — bulk-move tickets into another sprint. Use it for sprint
+  rollover ("carry everything unfinished into the next sprint" =
+  \`fromSprint\` + \`statuses: [backlog, progress, review, blocked]\` +
+  \`toSprint\`), for moving a whole epic's work between workspaces
+  (\`fromEpic\`, which re-parents the epic too), or for an explicit
+  \`ticketIds\` list. One of \`fromSprint\` / \`fromEpic\` / \`ticketIds\` is
+  required. Run it with \`dryRun: true\` first and show the user the selection —
+  it beats moving 40 tickets and moving them back. An epic belongs to exactly one
+  workspace, so a ticket that moves while its epic stays behind is dropped from
+  that epic; those ids come back as \`ungroupedTicketIds\`, and re-filing them
+  with \`set_ticket_epic\` in the target workspace is usually the follow-up.
+- \`delete_sprint\` with \`cascade: true\` deletes the sprint's epics, tickets and
+  comments outright instead of dropping them into Unsorted. It is the only
+  irreversible operation in this server: there is no undo and no archive, so
+  confirm with the user before calling it, and prefer plain \`delete_sprint\` or
+  \`migrate_tickets\` when you only need the workspace gone.
 - \`create_epic\` / \`edit_epic\` / \`delete_epic\` — epic lifecycle. \`list_epics\` / \`get_epic\` read them;
   \`list_epics\` accepts \`sprint: "none"\` for epics attached to no sprint.
 - \`create_user\` / \`edit_user\` — people.
@@ -807,18 +823,31 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'delete_sprint',
-    description: 'Delete a sprint by id. Any tickets attached to the sprint have their sprint field cleared, and any epics under it become sprintless; each is re-broadcast (ticket_updated / epic_updated) so open web clients refresh.',
+    description: 'Delete a sprint by id. By default nothing under it is destroyed: tickets have their sprint field cleared and epics become sprintless, each re-broadcast (ticket_updated / epic_updated) so open web clients refresh. Pass cascade:true to instead delete every epic under the sprint, every ticket in it, and those tickets\' comments — irreversible, so confirm with the user first.',
     inputSchema: {
       type: 'object',
-      properties: { id: { type: 'string' } },
+      properties: {
+        id: { type: 'string' },
+        cascade: {
+          type: 'boolean',
+          description: 'Delete the sprint\'s epics, tickets and comments instead of moving them to Unsorted. Irreversible.',
+        },
+      },
       required: ['id'],
     },
-    handler: async ({ id }, { storage, broadcast }) => {
-      const { ok, sweptTickets, sweptEpics } = await storage.deleteSprint(id);
-      if (!ok) return errorResult(`Sprint "${id}" not found`);
+    handler: async ({ id, cascade }, { storage, broadcast }) => {
+      const result = await storage.deleteSprint(id, { cascade: !!cascade });
+      if (!result.ok) return errorResult(`Sprint "${id}" not found`);
+      const { sweptTickets, sweptEpics, deletedTickets, deletedEpics, deletedComments } = result;
       broadcast?.({ type: 'sprint_deleted', data: { id } });
       for (const e of sweptEpics) {
         broadcast?.({ type: 'epic_updated', data: e });
+      }
+      for (const e of deletedEpics) {
+        broadcast?.({ type: 'epic_deleted', data: { id: e.id } });
+      }
+      for (const t of deletedTickets) {
+        broadcast?.({ type: 'ticket_deleted', data: { id: t.id } });
       }
       for (const t of sweptTickets) {
         broadcast?.({ type: 'ticket_updated', data: t });
@@ -826,8 +855,88 @@ export const TOOLS: ToolDef[] = [
       return jsonResult({
         id,
         deleted: true,
+        cascade: !!cascade,
         sweptTicketIds: sweptTickets.map(t => t.id),
         sweptEpicIds: sweptEpics.map(e => e.id),
+        deletedTicketIds: deletedTickets.map(t => t.id),
+        deletedEpicIds: deletedEpics.map(e => e.id),
+        deletedComments,
+      });
+    },
+  },
+  {
+    name: 'migrate_tickets',
+    description: 'Bulk-move tickets into another sprint: a whole sprint\'s tickets, a whole epic\'s, a status subset (e.g. carry unfinished work into the next sprint), or an explicit id list. Requires at least one of fromSprint / fromEpic / ticketIds. A moved ticket whose epic stays behind loses its epic tag — an epic belongs to one workspace — and those ids come back as ungroupedTicketIds. Use dryRun:true first to see the selection. Broadcasts ticket_updated per moved ticket.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        toSprint: {
+          type: 'string',
+          description: 'Target sprint id, or "none" to move the selection into the Unsorted workspace.',
+        },
+        fromSprint: { type: 'string', description: 'Source sprint id, or "none" for tickets with no sprint.' },
+        fromEpic: { type: 'string', description: 'Source epic id, or "none" for tickets with no epic.' },
+        statuses: {
+          type: 'array',
+          items: { type: 'string', enum: [...STATUSES] },
+          description: 'Only move tickets in these statuses. Omit for every status.',
+        },
+        ticketIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Explicit ticket ids, intersected with the filters above.',
+        },
+        moveEpic: {
+          type: 'boolean',
+          description: 'With fromEpic, also re-parent the epic itself. Default true; ignored when a status/id subset means only part of the epic moves.',
+        },
+        dryRun: { type: 'boolean', description: 'Report the selection without writing.' },
+      },
+      required: ['toSprint'],
+    },
+    handler: async ({ toSprint, fromSprint, fromEpic, statuses, ticketIds, moveEpic, dryRun }, { storage, broadcast }) => {
+      const target = toSprint === 'none' || toSprint === null ? null : toSprint;
+      // Validate the source refs up front for the same reason every other write
+      // tool does: a typo'd id would otherwise report a successful no-op.
+      if (fromSprint && fromSprint !== 'none') {
+        const bad = await badSprintRef(storage, fromSprint);
+        if (bad) return errorResult(bad);
+      }
+      if (fromEpic && fromEpic !== 'none') {
+        const bad = await badEpicRef(storage, fromEpic);
+        if (bad) return errorResult(bad);
+      }
+      let result;
+      try {
+        result = await storage.moveTicketsToSprint({
+          toSprint: target,
+          ...(fromSprint ? { fromSprint } : {}),
+          ...(fromEpic ? { fromEpic } : {}),
+          ...(statuses ? { statuses } : {}),
+          ...(ticketIds ? { ticketIds } : {}),
+          ...(moveEpic !== undefined ? { moveEpic } : {}),
+          ...(dryRun ? { dryRun: true } : {}),
+        });
+      } catch (error) {
+        return errorResult(error instanceof Error ? error.message : String(error));
+      }
+      if (!dryRun) {
+        for (const t of result.moved) {
+          broadcast?.({ type: 'ticket_updated', data: t });
+        }
+        if (result.epic) broadcast?.({ type: 'epic_updated', data: result.epic });
+      }
+      return jsonResult({
+        toSprint: target,
+        moved: result.moved.length,
+        movedTicketIds: result.moved.map(t => t.id),
+        matched: result.matched,
+        alreadyThere: result.alreadyThere,
+        // Moved tickets that lost their epic tag because the epic stayed behind
+        // in the old workspace.
+        ungroupedTicketIds: result.ungroupedTicketIds,
+        ...(result.epic !== undefined ? { epic: result.epic } : {}),
+        ...(dryRun ? { dryRun: true } : {}),
       });
     },
   },

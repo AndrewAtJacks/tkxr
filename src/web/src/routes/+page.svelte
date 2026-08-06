@@ -767,6 +767,7 @@
       <SprintPanel
         sprint={activeSprintSel}
         {isCreate}
+        sprints={$sprintStore}
         users={$userStore}
         on:reload={reload}
         on:close={closePanel}

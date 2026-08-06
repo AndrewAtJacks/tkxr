@@ -3,6 +3,7 @@ import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
 import { COLOR_ERROR, isValidColor } from '../../core/color.js';
+import { runMigrate } from './migrate.js';
 import type { Epic, EpicStatus, Sprint } from '../../core/types.js';
 
 interface EpicArgs extends minimist.ParsedArgs {
@@ -17,6 +18,10 @@ interface EpicArgs extends minimist.ParsedArgs {
   'clear-color'?: boolean;
   'clear-sprint'?: boolean;
   unset?: boolean;
+  status?: string | string[];
+  tickets?: string | string[];
+  'dry-run'?: boolean;
+  'keep-epic'?: boolean;
 }
 
 const VALID_EPIC_STATUSES: EpicStatus[] = ['planning', 'active', 'completed'];
@@ -42,6 +47,9 @@ export async function manageEpic(args: EpicArgs): Promise<void> {
     case 'edit':
       await editEpic(rest, args);
       break;
+    case 'migrate':
+      await migrateEpic(rest, args);
+      break;
     default:
       console.error(chalk.red(`Unknown epic command: ${subcommand}`));
       console.log(chalk.gray('Use "epic help" for available commands.'));
@@ -64,6 +72,7 @@ function showEpicHelp() {
   console.log('  set <ticket-id> <epic-id>     Attach a ticket to an epic');
   console.log('  set <ticket-id> --unset       Remove a ticket from its epic');
   console.log('  edit <id> [options]           Edit epic fields (name/desc/goal/color/sprint)');
+  console.log('  migrate <id> <sprint-id>      Move the epic and its tickets to another sprint');
   console.log();
   console.log(chalk.green('Options:'));
   console.log('  --description <text>      Epic description (optional)');
@@ -71,6 +80,15 @@ function showEpicHelp() {
   console.log('  --color <hex>             Chip color used by the board (optional)');
   console.log('  --sprint <id>             Sprint (workspace) the epic lives under');
   console.log('  --unset                   Remove ticket from its epic');
+  console.log();
+  console.log(chalk.green('Migrate options:'));
+  console.log('  --status <list>           Only these statuses (comma-separated, repeatable)');
+  console.log('  --keep-epic               Move the tickets but leave the epic where it is');
+  console.log('  --dry-run                 Show what would move without writing');
+  console.log(chalk.dim('  The target may be "none" for the Unsorted (no sprint) bucket.'));
+  console.log(chalk.dim('  A --status subset moves only those tickets; the epic stays put.'));
+  console.log(chalk.dim('  Tickets that move away from an epic that stays behind lose the epic tag —'));
+  console.log(chalk.dim('  an epic belongs to one workspace.'));
   console.log();
   console.log(chalk.green('Status values:'));
   console.log('  planning, active, completed');
@@ -83,6 +101,37 @@ function showEpicHelp() {
   console.log('  tkxr epic edit epi-abc12345 --name "Auth & SSO" --color "#7c3aed"');
   console.log('  tkxr epic edit epi-abc12345 --clear-sprint');
   console.log('  tkxr epics --sprint spr-abc12345');
+  console.log('  tkxr epic migrate epi-abc12345 spr-def45678');
+  console.log('  tkxr epic migrate epi-abc12345 spr-def45678 --status backlog --keep-epic');
+}
+
+/**
+ * Move an epic's tickets into another workspace (tas-vEpBfx0t).
+ *
+ * `epic edit --sprint` moves only the epic record, which leaves its tickets
+ * behind in the old workspace — an epic rendering under a sprint that holds
+ * none of its work. This moves both, unless `--keep-epic` or a `--status`
+ * subset says otherwise (a partial move is a split, not a move, so the epic
+ * stays with the tickets left behind).
+ */
+async function migrateEpic(rest: string[], args: EpicArgs): Promise<void> {
+  const [epicId, target] = rest;
+
+  if (!epicId || !target) {
+    console.error(chalk.red('Epic ID and target sprint ID are required.'));
+    console.log(chalk.gray('Usage: tkxr epic migrate <epic-id> <sprint-id> [--status ...] [--keep-epic] [--dry-run]'));
+    console.log(chalk.gray('       The target may be "none" for the Unsorted bucket.'));
+    process.exit(1);
+  }
+
+  await runMigrate({
+    target,
+    fromEpic: epicId,
+    status: args.status,
+    tickets: args.tickets,
+    keepEpic: !!args['keep-epic'],
+    dryRun: !!args['dry-run'],
+  });
 }
 
 /** Print the standard epic summary block used by create/status/edit. */

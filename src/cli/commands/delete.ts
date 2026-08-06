@@ -5,6 +5,7 @@ import { notifier } from '../../core/notifier.js';
 
 interface DeleteArgs extends minimist.ParsedArgs {
   force?: boolean;
+  cascade?: boolean;
 }
 
 export async function deleteTicket(args: DeleteArgs): Promise<void> {
@@ -50,6 +51,41 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
       console.log(chalk.dim(`  Remove it first if you want tkxr to clean it up: tkxr worktree remove ${id}`));
     }
 
+    // `--cascade` only means something for a sprint. Rejecting it elsewhere
+    // beats silently ignoring a flag whose whole purpose is deleting more.
+    const cascade = !!args.cascade;
+    if (cascade && entityType !== 'sprints') {
+      console.log(chalk.red(`--cascade only applies to sprints (${id} is a ${entityType.slice(0, -1)}).`));
+      return;
+    }
+
+    // Show the blast radius before asking for confirmation — this is the one
+    // delete in tkxr that destroys data rather than detaching it.
+    if (entityType === 'sprints') {
+      const allTickets = await storage.getAllTickets();
+      const scopedTickets = allTickets.filter(t => t.sprint === id);
+      const scopedEpics = (await storage.getEpics()).filter(e => e.sprint === id);
+      if (cascade) {
+        const counts = await storage.getCommentCounts();
+        const commentCount = scopedTickets.reduce((sum, t) => sum + (counts[t.id] || 0), 0);
+        console.log(chalk.red.bold('  CASCADE: this permanently deletes everything under the sprint.'));
+        console.log(chalk.red(`    ${scopedTickets.length} ticket(s), ${scopedEpics.length} epic(s), ${commentCount} comment(s)`));
+        const orphanWorktrees = [
+          ...scopedTickets.filter(t => t.worktree),
+          ...scopedEpics.filter(e => e.worktree),
+        ];
+        if (orphanWorktrees.length > 0) {
+          console.log(chalk.yellow(`    ${orphanWorktrees.length} worktree(s) under this sprint stay on disk and stop being tracked:`));
+          for (const o of orphanWorktrees) {
+            console.log(chalk.dim(`      ${o.id}  ${(o as any).worktree.path}  (${(o as any).worktree.branch})`));
+          }
+        }
+      } else {
+        console.log(chalk.dim(`  ${scopedTickets.length} ticket(s) and ${scopedEpics.length} epic(s) move to the Unsorted workspace.`));
+        console.log(chalk.dim('  Pass --cascade to delete them along with the sprint instead.'));
+      }
+    }
+
     // Confirm deletion unless --force is specified
     if (!args.force) {
       console.log(chalk.red('Use --force to confirm deletion'));
@@ -77,6 +113,11 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
     // sprintless, so they need re-broadcasting or an open board keeps drawing
     // them under a workspace that no longer exists.
     let sweptEpics: Awaited<ReturnType<typeof storage.deleteSprint>>['sweptEpics'] = [];
+    // Cascade removes rather than detaches — these carry the rows that went so
+    // every open board can drop them too.
+    let deletedTickets: Awaited<ReturnType<typeof storage.deleteSprint>>['deletedTickets'] = [];
+    let deletedEpics: Awaited<ReturnType<typeof storage.deleteSprint>>['deletedEpics'] = [];
+    let deletedComments = 0;
     if (entityType === 'users') {
       const r = await storage.deleteUser(id);
       deleted = r.deleted;
@@ -86,10 +127,13 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
       deleted = r.ok;
       sweptTickets = r.sweptTickets;
     } else if (entityType === 'sprints') {
-      const r = await storage.deleteSprint(id);
+      const r = await storage.deleteSprint(id, { cascade });
       deleted = r.ok;
       sweptTickets = r.sweptTickets;
       sweptEpics = r.sweptEpics;
+      deletedTickets = r.deletedTickets;
+      deletedEpics = r.deletedEpics;
+      deletedComments = r.deletedComments;
     } else {
       deleted = await storage.deleteEntity(entityType, id);
     }
@@ -99,13 +143,23 @@ export async function deleteTicket(args: DeleteArgs): Promise<void> {
         await notifier.notifyTicketDeleted(id);
       } else if (entityType === 'sprints') {
         await notifier.notifySprintDeleted(id);
+        for (const e of deletedEpics) {
+          await notifier.notifyEpicDeleted(e.id);
+        }
+        await notifier.notifyTicketsDeleted(deletedTickets.map(t => t.id));
         for (const e of sweptEpics) {
           await notifier.notifyEpicUpdated(e);
         }
-        for (const t of sweptTickets) {
-          await notifier.notifyTicketUpdated(t);
+        await notifier.notifyTicketsUpdated(sweptTickets);
+        if (deletedTickets.length || deletedEpics.length) {
+          console.log(chalk.dim(`  Deleted ${deletedTickets.length} ticket(s), ${deletedEpics.length} epic(s), ${deletedComments} comment(s).`));
         }
-        if (sweptTickets.length) {
+        if (sweptTickets.length && cascade) {
+          // Tickets in *other* sprints that were filed under one of the deleted
+          // epics — they survive, minus the epic tag.
+          console.log(chalk.dim(`  Ungrouped ${sweptTickets.length} ticket(s) outside this sprint: ${sweptTickets.map(t => t.id).join(', ')}`));
+        }
+        if (sweptTickets.length && !cascade) {
           console.log(chalk.dim(`  Detached ${sweptTickets.length} ticket(s): ${sweptTickets.map(t => t.id).join(', ')}`));
           console.log(chalk.dim('  They moved to the Unsorted workspace — find them with: tkxr list --sprint none'));
         }

@@ -32,6 +32,71 @@ export interface TicketQueryResult {
   total: number;
 }
 
+// --- Bulk operations ----------------------------------------------------------
+
+export interface DeleteSprintOptions {
+  /**
+   * Delete everything under the sprint instead of detaching it: the sprint's
+   * epics, the tickets filed in it, and those tickets' comments. Off by default
+   * — a plain delete stays non-destructive and drops the rows into Unsorted.
+   */
+  cascade?: boolean;
+}
+
+export interface DeleteSprintResult {
+  ok: boolean;
+  /** Tickets whose `sprint`/`epic` field was cleared and that still exist. */
+  sweptTickets: Ticket[];
+  /** Epics detached from the sprint (non-cascade only) — they still exist. */
+  sweptEpics: Epic[];
+  /** Tickets removed outright (cascade only). */
+  deletedTickets: Ticket[];
+  /** Epics removed outright (cascade only). */
+  deletedEpics: Epic[];
+  /** Comments removed along with their tickets (cascade only). */
+  deletedComments: number;
+}
+
+export interface MoveTicketsOptions {
+  /** Source sprint id, or the literal `'none'` for the sprintless bucket. */
+  fromSprint?: string;
+  /** Source epic id, or the literal `'none'` for tickets with no epic. */
+  fromEpic?: string;
+  /** Restrict to these statuses. Omitted means every status. */
+  statuses?: TicketStatus[];
+  /** Explicit id allowlist, intersected with the filters above. */
+  ticketIds?: string[];
+  /** Target sprint id, or `null` to move the selection into Unsorted. */
+  toSprint: string | null;
+  /**
+   * When the selection is a single epic, move the epic record with its tickets.
+   * Defaults to true: an epic left in sprint A while its tickets sit in sprint B
+   * renders under a workspace that holds none of its work.
+   */
+  moveEpic?: boolean;
+  /** Report what would move without writing anything. */
+  dryRun?: boolean;
+}
+
+export interface MoveTicketsResult {
+  /** Tickets actually rewritten. */
+  moved: Ticket[];
+  /** How many tickets the selection matched, including no-ops. */
+  matched: number;
+  /** Matched but already in the target sprint, so left untouched. */
+  alreadyThere: number;
+  /** The re-parented epic, when `moveEpic` applied. */
+  epic?: Epic | null;
+  /**
+   * Ids of moved tickets that were dropped from their epic on the way out,
+   * because that epic stayed behind in another sprint. An epic belongs to one
+   * workspace and the board's epic filter is scoped to it, so a ticket keeping
+   * a tag from the sprint it just left would render under an epic the target
+   * workspace doesn't list. Callers report the count.
+   */
+  ungroupedTicketIds: string[];
+}
+
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
@@ -74,6 +139,21 @@ function decodeCursor(cursor: string): { sortValue: string; id: string } | null 
   } catch {
     return null;
   }
+}
+
+/**
+ * Turn a raw NDJSON row into the `Ticket` shape callers expect: real `Date`s
+ * for the timestamps, and legacy `todo` normalized to `backlog` the same way
+ * `getAllTickets` does on read. Bulk paths return tickets straight out of the
+ * chunk rewrite, so they need this before handing them to a broadcast.
+ */
+function hydrate(raw: any): Ticket {
+  return {
+    ...raw,
+    status: raw.status === 'todo' ? 'backlog' : raw.status,
+    createdAt: new Date(raw.createdAt),
+    updatedAt: new Date(raw.updatedAt),
+  };
 }
 
 export class ProjectStorage {
@@ -299,43 +379,42 @@ export class ProjectStorage {
     return progress;
   }
 
-  async deleteSprint(sprintId: string): Promise<{ ok: boolean; sweptTickets: Ticket[]; sweptEpics: Epic[] }> {
+  /**
+   * Delete a sprint.
+   *
+   * Default (`cascade: false`) is non-destructive: tickets and epics under the
+   * sprint survive and land in the Unsorted workspace. With `cascade: true` the
+   * whole subtree goes — every epic under the sprint, every ticket filed in it,
+   * and those tickets' comments (tas-nptsO5gE).
+   *
+   * Cascade never touches git: a ticket or epic worktree is left checked out on
+   * disk exactly as `deleteTicket`/`deleteEpic` leave it, and once the record is
+   * gone nothing remembers the path. Callers warn about that before confirming.
+   */
+  async deleteSprint(sprintId: string, options: DeleteSprintOptions = {}): Promise<DeleteSprintResult> {
+    const empty = { sweptTickets: [], sweptEpics: [], deletedTickets: [], deletedEpics: [], deletedComments: 0 };
     const sprints = await this.getSprints();
     const index = sprints.findIndex(s => s.id === sprintId);
-    if (index === -1) return { ok: false, sweptTickets: [], sweptEpics: [] };
+    if (index === -1) return { ok: false, ...empty };
     sprints.splice(index, 1);
     await fs.writeFile(this.sprintsPath, JSON.stringify(sprints, null, 2), 'utf8');
+
+    if (options.cascade) {
+      return { ok: true, ...(await this.cascadeSprintContents(sprintId)) };
+    }
 
     // Sweep tickets that were attached to this sprint — leaving stale sprint refs
     // makes them disappear from any sprint view but linger under "All tickets" with
     // a broken chip. Clear the field in-place across the NDJSON chunks and return
     // the updated tickets so callers can broadcast ticket_updated for each.
     const sweptTickets: Ticket[] = [];
-    const chunkFiles = await this.getTicketChunkFiles();
-    for (const file of chunkFiles) {
-      const filePath = path.join(this.ticketsDir, file);
-      const content = await fs.readFile(filePath, 'utf8');
-      const lines = content.split('\n').filter(line => line.trim());
-      let touched = false;
-      const newLines = lines.map(line => {
-        const t = JSON.parse(line);
-        if (t.sprint === sprintId) {
-          touched = true;
-          const next = { ...t, sprint: undefined, updatedAt: new Date() };
-          delete next.sprint;
-          sweptTickets.push({
-            ...next,
-            createdAt: new Date(t.createdAt),
-            updatedAt: next.updatedAt,
-          });
-          return JSON.stringify(next);
-        }
-        return line;
-      });
-      if (touched) {
-        await fs.writeFile(filePath, newLines.map(l => l + '\n').join(''), 'utf8');
-      }
-    }
+    await this.mapTicketChunks(t => {
+      if (t.sprint !== sprintId) return t;
+      const next = { ...t, updatedAt: new Date() };
+      delete next.sprint;
+      sweptTickets.push(hydrate(next));
+      return next;
+    });
 
     // Detach epics that belonged to this sprint so they don't dangle under a
     // deleted workspace. They keep their tickets but become sprintless until
@@ -368,7 +447,149 @@ export class ProjectStorage {
       // detachment didn't persist, so report none rather than a false positive.
     }
 
-    return { ok: true, sweptTickets, sweptEpics };
+    return { ok: true, sweptTickets, sweptEpics, deletedTickets: [], deletedEpics: [], deletedComments: 0 };
+  }
+
+  /**
+   * The destructive half of `deleteSprint({ cascade: true })`, split out so the
+   * non-cascade path reads as it always did.
+   *
+   * Order matters: tickets first (so their comments go with them), then epics.
+   * An epic under this sprint can still own tickets filed in *another* sprint —
+   * those survive, and the epic delete clears their now-dangling `epic` field,
+   * which is what `sweptTickets` carries back for re-broadcast.
+   */
+  private async cascadeSprintContents(sprintId: string): Promise<Omit<DeleteSprintResult, 'ok'>> {
+    const deletedTickets: Ticket[] = [];
+    await this.mapTicketChunks(t => {
+      if (t.sprint !== sprintId) return t;
+      deletedTickets.push(hydrate(t));
+      return null;
+    });
+
+    const deletedComments = deletedTickets.length > 0
+      ? await this.deleteCommentsForTickets(new Set(deletedTickets.map(t => t.id)))
+      : 0;
+
+    const deletedEpics: Epic[] = [];
+    const sweptTickets: Ticket[] = [];
+    try {
+      const epics = await this.getEpics();
+      const doomed = epics.filter(e => e.sprint === sprintId);
+      if (doomed.length > 0) {
+        const doomedIds = new Set(doomed.map(e => e.id));
+        await fs.writeFile(
+          this.epicsPath,
+          JSON.stringify(epics.filter(e => !doomedIds.has(e.id)), null, 2),
+          'utf8',
+        );
+        deletedEpics.push(...doomed);
+        await this.mapTicketChunks(t => {
+          if (!t.epic || !doomedIds.has(t.epic)) return t;
+          const next = { ...t, updatedAt: new Date() };
+          delete next.epic;
+          sweptTickets.push(hydrate(next));
+          return next;
+        });
+      }
+    } catch {
+      // epics.json missing / unreadable, or the write failed — report none
+      // rather than claiming a delete that didn't land.
+    }
+
+    return { sweptTickets, sweptEpics: [], deletedTickets, deletedEpics, deletedComments };
+  }
+
+  /**
+   * Move a selection of tickets into another sprint (or out of every sprint
+   * when `toSprint` is null) in a single pass over the NDJSON chunks
+   * (tas-vEpBfx0t).
+   *
+   * The selection is the intersection of whatever filters are supplied, and at
+   * least one of `fromSprint` / `fromEpic` / `ticketIds` is required — without
+   * that guard an options object with a typo'd key would quietly move every
+   * ticket in the project.
+   */
+  async moveTicketsToSprint(options: MoveTicketsOptions): Promise<MoveTicketsResult> {
+    const { fromSprint, fromEpic, statuses, ticketIds, toSprint } = options;
+    if (!fromSprint && !fromEpic && (!ticketIds || ticketIds.length === 0)) {
+      throw new Error('A selection is required: pass fromSprint, fromEpic or ticketIds');
+    }
+    if (toSprint !== null) {
+      const sprints = await this.getSprints();
+      if (!sprints.some(s => s.id === toSprint)) {
+        throw new Error(`Sprint "${toSprint}" not found`);
+      }
+    }
+
+    const idAllowlist = ticketIds && ticketIds.length > 0 ? new Set(ticketIds) : null;
+    const statusFilter = statuses && statuses.length > 0 ? new Set<string>(statuses) : null;
+
+    // Re-parent the epic itself when the selection *is* an epic and nothing
+    // narrowed it further — moving half an epic's tickets is a split, not a
+    // move, and dragging the epic along would strand the tickets left behind.
+    // Decided before the pass because the rewrite needs to know whether each
+    // ticket's epic is coming with it.
+    const wholeEpic = fromEpic !== undefined
+      && fromEpic !== 'none'
+      && !statusFilter
+      && !idAllowlist
+      && options.moveEpic !== false;
+
+    // Where each epic ends up once this call is done. An epic lives in exactly
+    // one workspace, so a ticket that moves away from its epic loses the tag
+    // rather than carrying a chip the target board's epic filter won't list.
+    const epicSprint = new Map((await this.getEpics()).map(e => [e.id, e.sprint ?? null]));
+    const epicFollows = (epicId: string): boolean =>
+      (wholeEpic && epicId === fromEpic) || (epicSprint.get(epicId) ?? null) === toSprint;
+
+    const moved: Ticket[] = [];
+    const ungroupedTicketIds: string[] = [];
+    let matched = 0;
+    let alreadyThere = 0;
+
+    await this.mapTicketChunks(t => {
+      if (idAllowlist && !idAllowlist.has(t.id)) return t;
+      if (fromSprint !== undefined) {
+        if (fromSprint === 'none') { if (t.sprint) return t; }
+        else if (t.sprint !== fromSprint) return t;
+      }
+      if (fromEpic !== undefined) {
+        if (fromEpic === 'none') { if (t.epic) return t; }
+        else if (t.epic !== fromEpic) return t;
+      }
+      // Legacy `todo` rows read back as `backlog` everywhere else, so the
+      // filter has to see the same value the caller was shown.
+      const status = t.status === 'todo' ? 'backlog' : t.status;
+      if (statusFilter && !statusFilter.has(status)) return t;
+
+      matched++;
+      const current = t.sprint ?? null;
+      if (current === toSprint) {
+        alreadyThere++;
+        return t;
+      }
+      const next = { ...t, status, updatedAt: new Date() };
+      if (toSprint === null) delete next.sprint;
+      else next.sprint = toSprint;
+      if (next.epic && !epicFollows(next.epic)) {
+        delete next.epic;
+        ungroupedTicketIds.push(t.id);
+      }
+      moved.push(hydrate(next));
+      // A dry run still reports the would-be rows; it just hands the original
+      // object back so the chunk is left byte-identical.
+      return options.dryRun ? t : next;
+    });
+
+    let epic: Epic | null | undefined;
+    if (wholeEpic) {
+      epic = options.dryRun
+        ? (await this.getEpics()).find(e => e.id === fromEpic) ?? null
+        : await this.updateEpic(fromEpic, { sprint: toSprint ?? undefined });
+    }
+
+    return { moved, matched, alreadyThere, ungroupedTicketIds, ...(epic !== undefined ? { epic } : {}) };
   }
 
   // Epic CRUD
@@ -472,6 +693,74 @@ export class ProjectStorage {
   }
 
   // Ticket CRUD (NDJSON)
+  /**
+   * One pass over every ticket chunk, applying `fn` to each row.
+   *
+   * `fn` returns the row to write back, or `null` to drop it; returning the row
+   * it was handed leaves that line byte-identical, and a chunk nothing touched
+   * is never rewritten. Bulk operations (cascade delete, sprint migration) go
+   * through this rather than looping `updateTicket`, which re-reads and
+   * rewrites every chunk per ticket.
+   */
+  private async mapTicketChunks(fn: (t: any) => any | null): Promise<void> {
+    const chunkFiles = await this.getTicketChunkFiles();
+    for (const file of chunkFiles) {
+      const filePath = path.join(this.ticketsDir, file);
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      let touched = false;
+      const out: string[] = [];
+      for (const line of lines) {
+        const t = JSON.parse(line);
+        const next = fn(t);
+        if (next === null) {
+          touched = true;
+          continue;
+        }
+        if (next === t) {
+          out.push(line);
+          continue;
+        }
+        touched = true;
+        out.push(JSON.stringify(next));
+      }
+      if (touched) {
+        await fs.writeFile(filePath, out.map(l => l + '\n').join(''), 'utf8');
+      }
+    }
+  }
+
+  /**
+   * Drop every comment belonging to any of `ticketIds`, in one pass per chunk.
+   * Returns how many were removed. Used by the cascade delete — deleting the
+   * tickets one at a time via `deleteComment` is O(comments × chunks).
+   */
+  private async deleteCommentsForTickets(ticketIds: Set<string>): Promise<number> {
+    const chunkFiles = await this.getCommentChunkFiles();
+    let removed = 0;
+    for (const file of chunkFiles) {
+      const filePath = path.join(this.commentsDir, file);
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      const kept = lines.filter(line => {
+        try {
+          const c = JSON.parse(line);
+          if (ticketIds.has(c.ticketId)) {
+            removed++;
+            return false;
+          }
+        } catch {
+          // Malformed line — keep it rather than silently discarding data.
+        }
+        return true;
+      });
+      if (kept.length !== lines.length) {
+        await fs.writeFile(filePath, kept.map(l => l + '\n').join(''), 'utf8');
+      }
+    }
+    return removed;
+  }
+
   private async getTicketChunkFiles(): Promise<string[]> {
     try {
       const files = await fs.readdir(this.ticketsDir);

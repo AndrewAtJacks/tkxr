@@ -15,6 +15,8 @@
   // and the last consumer of the caller's paged store was the sprint commit
   // prompt, which is gone (docs/branching-model.md).
   export let users: User[] = [];
+  /** All sprints — backs the "move these tickets to…" target picker. */
+  export let sprints: Sprint[] = [];
 
   const dispatch = createEventDispatcher();
 
@@ -144,19 +146,141 @@
     } catch { /* noop */ }
   }
 
-  async function deleteSprint() {
-    if (!sprint) return;
-    // A sprint frames the whole workspace now, so deleting one doesn't just
-    // untag its tickets — it moves them out of every sprint view. Say where
-    // they land (tas-hr2pCGjr).
-    if (!confirm('Delete this sprint?\n\nIts tickets and epics are not deleted — they move to the "Unsorted" workspace, reachable from the sprint switcher.')) return;
+  // ---- Bulk migrate (tas-vEpBfx0t) ----
+  // Rolling unfinished work into the next sprint is the common end-of-sprint
+  // move, and doing it a ticket at a time through "Add from backlog" on the
+  // other panel doesn't scale past a handful.
+  const MIGRATE_STATUSES: Ticket['status'][] = ['backlog', 'progress', 'review', 'blocked', 'done'];
+  let migrateTarget = '';
+  /** Empty means "every status" — the default whole-sprint move. */
+  let migrateStatuses: Ticket['status'][] = [];
+  let migrateBusy = false;
+
+  $: otherSprints = sprints.filter(s => s.id !== sprint?.id);
+  // Counted off the panel's own slice, which is capped at 200 like every other
+  // panel's fetch. The server is authoritative — the toast reports what it
+  // actually moved, which is what a >200-ticket sprint should be read from.
+  $: migrateSelection = sprintTickets.filter(
+    t => migrateStatuses.length === 0 || migrateStatuses.includes(t.status),
+  );
+  // At the cap the count is a floor, not a total, so the button drops the
+  // number rather than promising one it can't stand behind.
+  $: migrateCountKnown = sprintTickets.length < 200;
+
+  function toggleMigrateStatus(s: Ticket['status']) {
+    migrateStatuses = migrateStatuses.includes(s)
+      ? migrateStatuses.filter(x => x !== s)
+      : [...migrateStatuses, s];
+  }
+
+  async function migrateTickets() {
+    if (!sprint || migrateBusy || !migrateTarget) return;
+    migrateBusy = true;
     try {
-      const res = await fetch(`/api/sprints/${sprint.id}`, { method: 'DELETE' });
+      const res = await fetch('/api/tickets/bulk/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromSprint: sprint.id,
+          toSprint: migrateTarget === 'none' ? null : migrateTarget,
+          ...(migrateStatuses.length > 0 ? { statuses: migrateStatuses } : {}),
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
       if (res.ok) {
+        const targetName = migrateTarget === 'none'
+          ? 'Unsorted'
+          : (sprints.find(s => s.id === migrateTarget)?.name || 'the target sprint');
+        showToast(
+          j.moved === 0
+            ? `Nothing to move — ${j.matched || 0} matched, all already in ${targetName}`
+            : `Moved ${j.moved} ticket${j.moved === 1 ? '' : 's'} to ${targetName}`,
+          j.moved === 0 ? 'info' : 'success',
+        );
+        // An epic belongs to one workspace, so tickets that moved away from an
+        // epic staying here were dropped from it. Say so — it's a real edit,
+        // not a detail of the move.
+        const ungrouped = j.ungroupedTicketIds?.length ?? 0;
+        if (ungrouped > 0) {
+          showToast(
+            `${ungrouped} of them left their epic behind and ${ungrouped === 1 ? 'is' : 'are'} now ungrouped in ${targetName}`,
+            'info',
+            6000,
+          );
+        }
+        migrateStatuses = [];
+        await refetchAll();
+        dispatch('reload');
+      } else {
+        showToast(j.error?.message || 'Failed to move tickets', 'error', 4000);
+      }
+    } catch {
+      showToast('Failed to move tickets', 'error');
+    } finally {
+      migrateBusy = false;
+    }
+  }
+
+  // ---- Delete (tas-nptsO5gE) ----
+  // Two very different operations behind one button, so it opens a dialog
+  // rather than a `confirm()`: the default detaches the sprint's contents into
+  // Unsorted, and the cascade permanently deletes them. The dialog fetches the
+  // real counts so "delete everything" isn't an abstraction.
+  let confirmingDelete = false;
+  let deleteMode: 'detach' | 'cascade' = 'detach';
+  let cascadeAck = false;
+  let deleteBusy = false;
+  // Leaving the cascade option re-arms its confirmation, so a tick made and
+  // then reconsidered can't carry back into a second look at it.
+  $: if (deleteMode === 'detach') cascadeAck = false;
+  let contents: {
+    tickets: number;
+    epics: number;
+    comments: number;
+    worktrees: { id: string; path: string; branch: string }[];
+  } | null = null;
+
+  async function openDeleteDialog() {
+    if (!sprint) return;
+    confirmingDelete = true;
+    deleteMode = 'detach';
+    cascadeAck = false;
+    contents = null;
+    try {
+      const res = await fetch(`/api/sprints/${sprint.id}/contents`);
+      if (res.ok) contents = await res.json();
+    } catch { /* dialog still works, just without the counts */ }
+  }
+
+  async function deleteSprint() {
+    if (!sprint || deleteBusy) return;
+    const cascade = deleteMode === 'cascade';
+    if (cascade && !cascadeAck) return;
+    deleteBusy = true;
+    try {
+      const res = await fetch(`/api/sprints/${sprint.id}${cascade ? '?cascade=true' : ''}`, {
+        method: 'DELETE',
+      });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast(
+          cascade
+            ? `Sprint deleted with ${j.deletedTicketIds?.length ?? 0} ticket(s), ${j.deletedEpicIds?.length ?? 0} epic(s), ${j.deletedComments ?? 0} comment(s)`
+            : 'Sprint deleted — its tickets and epics moved to Unsorted',
+          'success',
+          4000,
+        );
+        confirmingDelete = false;
         dispatch('reload');
         dispatch('close');
+      } else {
+        showToast(j.error || 'Failed to delete sprint', 'error', 4000);
       }
-    } catch { /* noop */ }
+    } catch {
+      showToast('Failed to delete sprint', 'error');
+    } finally {
+      deleteBusy = false;
+    }
   }
 
   async function assignToSprint(t: Ticket) {
@@ -315,6 +439,54 @@
       {/if}
     </div>
 
+    {#if sprintTickets.length > 0}
+      <div class="migrate">
+        <div class="section-head">Move tickets to another sprint</div>
+        <div class="hint">
+          Carries work over in one go — leave the statuses unset to move the whole
+          sprint, or pick some to move just those (e.g. everything unfinished).
+          Epics stay in this sprint, so tickets that move out of one are ungrouped
+          on arrival.
+        </div>
+        <div class="chips">
+          {#each MIGRATE_STATUSES as s (s)}
+            {@const on = migrateStatuses.includes(s)}
+            <button
+              class="chip"
+              class:on
+              style={on ? `border-color:${STATUS_COLOR[s]};color:${STATUS_COLOR[s]};background:${STATUS_COLOR[s]}1f` : ''}
+              on:click={() => toggleMigrateStatus(s)}
+            >{s}</button>
+          {/each}
+          {#if migrateStatuses.length > 0}
+            <button class="chip clear" on:click={() => (migrateStatuses = [])}>clear</button>
+          {/if}
+        </div>
+        <div class="migrate-row">
+          <select class="input" bind:value={migrateTarget}>
+            <option value="">Move to…</option>
+            {#each otherSprints as s (s.id)}
+              <option value={s.id}>{s.name}{s.status === 'completed' ? ' (completed)' : ''}</option>
+            {/each}
+            <option value="none">Unsorted (no sprint)</option>
+          </select>
+          <button
+            class="btn btn-primary"
+            disabled={!migrateTarget || migrateBusy || migrateSelection.length === 0}
+            on:click={migrateTickets}
+          >
+            {#if migrateBusy}
+              Moving…
+            {:else if migrateCountKnown}
+              Move {migrateSelection.length} ticket{migrateSelection.length === 1 ? '' : 's'}
+            {:else}
+              Move tickets
+            {/if}
+          </button>
+        </div>
+      </div>
+    {/if}
+
     {#if unassignedBacklog.length > 0}
       <div>
         <div class="section-head">Add from backlog</div>
@@ -338,10 +510,90 @@
     <button class="btn" on:click={() => dispatch('close')}>Cancel</button>
     <button class="btn btn-primary" on:click={commitCreate}>Create sprint</button>
   {:else}
-    <button class="btn btn-danger" on:click={deleteSprint}>Delete sprint</button>
+    <button class="btn btn-danger" on:click={openDeleteDialog}>Delete sprint</button>
     <span class="foot-hint">Edits save automatically</span>
   {/if}
 </footer>
+
+<svelte:window on:keydown={(e) => { if (confirmingDelete && e.key === 'Escape') confirmingDelete = false; }} />
+
+{#if confirmingDelete && sprint}
+  <div class="modal-layer">
+    <!-- Click-away lives on its own empty layer behind the dialog; Escape is
+         handled at the window above. -->
+    <div class="modal-scrim" role="presentation" on:click={() => (confirmingDelete = false)}></div>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Delete sprint">
+      <div class="modal-head">Delete “{sprint.name}”</div>
+
+      <div class="modal-body">
+        <div class="counts">
+          {#if contents}
+            <span><strong>{contents.tickets}</strong> ticket{contents.tickets === 1 ? '' : 's'}</span>
+            <span><strong>{contents.epics}</strong> epic{contents.epics === 1 ? '' : 's'}</span>
+            <span><strong>{contents.comments}</strong> comment{contents.comments === 1 ? '' : 's'}</span>
+          {:else}
+            <span class="muted">Counting what's in this sprint…</span>
+          {/if}
+        </div>
+
+        <label class="opt" class:sel={deleteMode === 'detach'}>
+          <input type="radio" bind:group={deleteMode} value="detach" />
+          <span>
+            <strong>Keep the contents</strong>
+            <em>Tickets and epics move to the Unsorted workspace, reachable from the sprint switcher.</em>
+          </span>
+        </label>
+
+        <label class="opt danger" class:sel={deleteMode === 'cascade'}>
+          <input type="radio" bind:group={deleteMode} value="cascade" />
+          <span>
+            <strong>Delete everything under it</strong>
+            <em>
+              Permanently deletes this sprint's epics, its tickets and their comments.
+              There is no undo and nothing is archived.
+            </em>
+          </span>
+        </label>
+
+        {#if deleteMode === 'cascade'}
+          {#if contents && contents.worktrees.length > 0}
+            <div class="warn">
+              {contents.worktrees.length} worktree{contents.worktrees.length === 1 ? '' : 's'} under this sprint
+              stay checked out on disk, and tkxr stops tracking them — remove them
+              with <code>git worktree remove</code> afterwards:
+              <ul>
+                {#each contents.worktrees as w (w.id)}
+                  <li class="mono">{w.path} <span class="muted">({w.branch})</span></li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+          <label class="ack">
+            <input type="checkbox" bind:checked={cascadeAck} />
+            <span>
+              I understand
+              {contents ? `${contents.tickets} ticket${contents.tickets === 1 ? '' : 's'} and ${contents.epics} epic${contents.epics === 1 ? '' : 's'}` : 'these tickets and epics'}
+              will be permanently deleted.
+            </span>
+          </label>
+        {/if}
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn" on:click={() => (confirmingDelete = false)}>Cancel</button>
+        <button
+          class="btn btn-danger"
+          disabled={deleteBusy || (deleteMode === 'cascade' && !cascadeAck)}
+          on:click={deleteSprint}
+        >
+          {deleteBusy
+            ? 'Deleting…'
+            : deleteMode === 'cascade' ? 'Delete sprint + contents' : 'Delete sprint only'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .head {
@@ -538,4 +790,127 @@
     justify-content: space-between;
   }
   .foot-hint { font-size: 10.5px; color: var(--faint); }
+
+  /* --- Bulk migrate --- */
+  .migrate {
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  .hint { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin-bottom: 10px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    padding: 3px 10px;
+    font-size: 11px;
+    font-family: inherit;
+    text-transform: capitalize;
+    cursor: pointer;
+  }
+  .chip:hover { color: var(--text); border-color: var(--border-strong); }
+  .chip.on { font-weight: 600; }
+  .chip.clear { text-transform: none; color: var(--faint); }
+  .migrate-row { display: flex; gap: 8px; align-items: center; }
+  .migrate-row .input { flex: 1; }
+
+  /* --- Delete dialog --- */
+  .modal-layer {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 60;
+  }
+  .modal-scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, .55);
+  }
+  .modal {
+    position: relative;
+    width: 100%;
+    max-width: 460px;
+    background: var(--card);
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    max-height: 80vh;
+  }
+  .modal-head {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .modal-body {
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+  }
+  .counts { display: flex; gap: 14px; font-size: 12px; color: var(--text2); }
+  .counts strong { color: var(--text); font-family: 'IBM Plex Mono'; }
+  .muted { color: var(--faint); }
+  .opt {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .opt.sel { border-color: var(--accent); }
+  .opt.danger.sel { border-color: #e5687f; }
+  .opt strong { display: block; font-size: 12.5px; color: var(--text); font-weight: 600; }
+  .opt em {
+    display: block;
+    font-style: normal;
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.45;
+    margin-top: 3px;
+  }
+  .warn {
+    background: #f2b5441a;
+    border: 1px solid #f2b54455;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 11.5px;
+    color: var(--text2);
+    line-height: 1.45;
+  }
+  .warn ul { margin: 6px 0 0; padding-left: 16px; }
+  .warn li { margin-top: 2px; }
+  .warn code {
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-size: 10.5px;
+  }
+  .ack {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    font-size: 11.5px;
+    color: var(--text2);
+    line-height: 1.45;
+    cursor: pointer;
+  }
+  .modal-foot {
+    padding: 12px 18px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
 </style>

@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import type minimist from 'minimist';
 import { createStorage } from '../../core/storage.js';
 import { notifier } from '../../core/notifier.js';
+import { runMigrate } from './migrate.js';
 
 interface SprintArgs extends minimist.ParsedArgs {
   _: string[];
@@ -15,6 +16,9 @@ interface SprintArgs extends minimist.ParsedArgs {
   'clear-start-date'?: boolean;
   'clear-end-date'?: boolean;
   unset?: boolean;
+  status?: string | string[];
+  tickets?: string | string[];
+  'dry-run'?: boolean;
 }
 
 export async function manageSprint(args: SprintArgs): Promise<void> {
@@ -41,6 +45,9 @@ export async function manageSprint(args: SprintArgs): Promise<void> {
     case 'edit':
       await editSprint(rest, args);
       break;
+    case 'migrate':
+      await migrateSprint(rest, args);
+      break;
     default:
       console.error(chalk.red(`Unknown sprint command: ${subcommand}`));
       console.log(chalk.gray('Use "sprint help" for available commands.'));
@@ -61,6 +68,7 @@ function showSprintHelp() {
   console.log('  set <ticket-id> <sprint-id>   Attach a ticket to a sprint');
   console.log('  set <ticket-id> --unset       Remove a ticket from its sprint');
   console.log('  edit <id> [options]           Edit sprint fields (name/desc/goal/dates)');
+  console.log('  migrate <from-id> <to-id>     Move a sprint\'s tickets to another sprint');
   console.log();
   console.log(chalk.green('Options:'));
   console.log('  --description <text>       Sprint description (optional)');
@@ -68,6 +76,12 @@ function showSprintHelp() {
   console.log('  --start-date <date>       Start date (optional)');
   console.log('  --end-date <date>         End date (optional)');
   console.log('  --unset                   Remove ticket from its sprint');
+  console.log();
+  console.log(chalk.green('Migrate options:'));
+  console.log('  --status <list>           Only these statuses (comma-separated, repeatable)');
+  console.log('  --tickets <list>          Only these ticket ids (comma-separated, repeatable)');
+  console.log('  --dry-run                 Show what would move without writing');
+  console.log(chalk.dim('  Either id may be "none" for the Unsorted (no sprint) bucket.'));
   console.log();
   console.log(chalk.green('Status values:'));
   console.log('  planning, active, completed');
@@ -82,6 +96,38 @@ function showSprintHelp() {
   console.log('  tkxr sprint edit spr-abc123 --name "Renamed" --goal "Ship v2"');
   console.log('  tkxr sprint edit spr-abc123 --start-date 2026-07-10 --end-date 2026-07-24');
   console.log('  tkxr sprint edit spr-abc123 --clear-goal');
+  console.log('  tkxr sprint migrate spr-abc123 spr-def456');
+  console.log('  tkxr sprint migrate spr-abc123 spr-def456 --status backlog,progress');
+  console.log('  tkxr sprint migrate spr-abc123 none --dry-run');
+}
+
+/**
+ * Carry a sprint's tickets over to another workspace — the bulk version of
+ * `sprint set`, for rolling unfinished work into the next sprint instead of
+ * moving it a ticket at a time (tas-vEpBfx0t).
+ */
+async function migrateSprint(rest: string[], args: SprintArgs): Promise<void> {
+  const [from, to] = rest;
+
+  if (!from || !to) {
+    console.error(chalk.red('Source and target sprint IDs are required.'));
+    console.log(chalk.gray('Usage: tkxr sprint migrate <from-sprint-id> <to-sprint-id> [--status ...] [--tickets ...] [--dry-run]'));
+    console.log(chalk.gray('       Either id may be "none" for the Unsorted bucket.'));
+    process.exit(1);
+  }
+
+  if (from === to) {
+    console.error(chalk.red('Source and target sprint are the same.'));
+    process.exit(1);
+  }
+
+  await runMigrate({
+    target: to,
+    fromSprint: from,
+    status: args.status,
+    tickets: args.tickets,
+    dryRun: !!args['dry-run'],
+  });
 }
 
 async function createSprint(rest: string[], args: SprintArgs): Promise<void> {
