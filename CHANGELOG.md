@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-08-06
+
+Bulk management of a workspace's contents: move a sprint's or an epic's
+tickets somewhere else in one operation, and delete a sprint's contents
+along with it when that's what you actually meant.
+
 ### Added
 - **Bulk ticket migration** (tas-vEpBfx0t). Moving work between
   workspaces a ticket at a time doesn't survive contact with a real
