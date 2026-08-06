@@ -250,6 +250,14 @@ tkxr sprint complete spr-abc12345                     # completed + roll up its 
 tkxr sprint edit spr-abc12345 --name "Auth Sprint" --end-date 2026-08-01
 tkxr sprint set tas-abc12345 spr-abc12345             # move ticket into workspace
 tkxr sprint set tas-abc12345 --unset                  # back to Unsorted
+
+tkxr sprint migrate spr-abc12345 spr-def45678         # move every ticket across
+tkxr sprint migrate spr-abc12345 spr-def45678 --status backlog,progress,review,blocked
+                                                      # roll unfinished work over
+tkxr sprint migrate spr-abc12345 none --dry-run       # preview; "none" = Unsorted
+
+tkxr delete spr-abc12345 --force                      # tickets + epics → Unsorted
+tkxr delete spr-abc12345 --cascade --force            # delete them with the sprint
 ```
 
 `tkxr sprints` groups by lifecycle so finished workspaces sink to the bottom,
@@ -263,6 +271,33 @@ Completing a sprint also marks every epic under it `completed`, on every path
 tickets, so without the rollup a closed workspace keeps reporting active epics.
 Tickets are left alone: carrying open tickets out of a completed sprint is
 normal, and the CLI just reports which ones they are.
+
+#### Bulk moves and cascade delete
+
+`sprint migrate` is the bulk form of `sprint set` — the end-of-sprint move where
+everything unfinished rolls into the next workspace. `--status` narrows the
+selection (repeatable, comma-separated), `--tickets` takes an explicit id list,
+and `--dry-run` prints the selection without writing. Either sprint id may be
+`none` for the Unsorted bucket.
+
+An epic belongs to exactly one workspace, so a ticket that moves while its epic
+stays behind is dropped from that epic rather than carrying a chip the target
+board's epic filter won't list. The command reports those ids; re-file them with
+`epic set`, or move the epic itself:
+
+```bash
+tkxr epic migrate epi-abc12345 spr-def45678           # epic + its tickets
+tkxr epic migrate epi-abc12345 spr-def45678 --status backlog --keep-epic
+                                                      # split some out, epic stays
+```
+
+Deleting a sprint is non-destructive by default: its tickets and epics survive
+in Unsorted. `--cascade` instead deletes every epic under the sprint, every
+ticket in it, and those tickets' comments. It is the only irreversible operation
+in tkxr — nothing is archived — so both the CLI and the web dialog print the
+exact counts first and require an explicit confirmation. Worktrees are never
+touched, and once the records are gone nothing remembers their paths, so remove
+those first if you want tkxr to clean them up.
 
 ### Epics (grouping within a workspace)
 
@@ -431,11 +466,18 @@ curl http://localhost:8080/api/mcp/guide     # markdown agent guide
 
 Read: `agent_guide`, `list_tickets`, `get_ticket`, `search_tickets`, `list_users`, `get_user`, `list_sprints`, `get_sprint`, `list_epics`, `get_epic`, `list_comments`, `list_worktrees`.
 
-Ticket mutations: `create_ticket`, `edit_ticket`, `update_ticket_status`, `assign_ticket`, `set_ticket_sprint`, `set_ticket_epic`, `delete_ticket`.
+Ticket mutations: `create_ticket`, `edit_ticket`, `update_ticket_status`, `assign_ticket`, `set_ticket_sprint`, `set_ticket_epic`, `delete_ticket`, `migrate_tickets`.
 
 Comment mutations: `add_comment`, `delete_comment`.
 
 Sprint mutations: `create_sprint`, `edit_sprint`, `update_sprint_status`, `delete_sprint`.
+
+`migrate_tickets` is the bulk move — a whole sprint's tickets, a whole epic's, a
+status subset, or an explicit id list — and takes `dryRun` so an agent can show
+the selection before committing to it. `delete_sprint` takes `cascade: true` to
+delete the sprint's epics, tickets and comments instead of dropping them into
+Unsorted; it is the only irreversible tool in the server, so confirm before
+calling it.
 
 Epic mutations: `create_epic`, `edit_epic`, `delete_epic`.
 
@@ -570,6 +612,7 @@ POST   /api/tickets
 PUT    /api/tickets/:id
 PUT    /api/tickets/:id/status
 DELETE /api/tickets/:id
+POST   /api/tickets/bulk/move            (bulk-move a selection into another sprint)
 
 # Comments
 GET    /api/tickets/:ticketId/comments
@@ -588,7 +631,8 @@ POST   /api/sprints
 PUT    /api/sprints/:id
 PUT    /api/sprints/:id/status
 POST   /api/sprints/:id/complete         (status → completed + roll up its epics)
-DELETE /api/sprints/:id
+GET    /api/sprints/:id/contents         (ticket/epic/comment counts a cascade would delete)
+DELETE /api/sprints/:id                  (?cascade=true also deletes its epics, tickets, comments)
 
 # Epics
 GET    /api/epics                        (?sprint=<id>, or none, to scope to one workspace)
@@ -667,6 +711,39 @@ cursor) whenever the query changes.
 curl "http://localhost:8080/api/tickets?limit=25&status=backlog&sortBy=priority"
 # → { "items": [...25 tickets...], "nextCursor": "MjAyNi0wNy0xNlQwNTo1NjoxNS4wNzdafHRhcy1hYmMxMjM0NQ", "total": 137 }
 ```
+
+### Bulk ticket moves
+
+`POST /api/tickets/bulk/move` moves a selection of tickets into another sprint in
+one pass over the ticket store, instead of `PUT /api/tickets/:id` per row.
+
+```jsonc
+{
+  "toSprint": "spr-def45678",        // required; null or "none" = the Unsorted bucket
+  "fromSprint": "spr-abc12345",      // source workspace, or "none"
+  "fromEpic": "epi-abc12345",        // source epic, or "none"
+  "statuses": ["backlog", "progress"], // omit for every status
+  "ticketIds": ["tas-abc12345"],     // explicit allowlist, intersected with the above
+  "moveEpic": true,                  // epic scope only; default true
+  "dryRun": false                    // report the selection without writing
+}
+```
+
+At least one of `fromSprint` / `fromEpic` / `ticketIds` is required — a
+selection-less call is a `400`, not a project-wide move. An unknown `toSprint`
+is also a `400`.
+
+The response is
+`{ movedTicketIds, moved, matched, alreadyThere, ungroupedTicketIds, toSprint, epic? }`.
+`matched` counts everything the selection hit including no-ops, `alreadyThere`
+those that were already in the target, and `ungroupedTicketIds` those dropped
+from an epic that stayed behind. Each moved ticket is broadcast as
+`ticket_updated` (and the epic as `epic_updated` when it was re-parented);
+a `dryRun` broadcasts nothing.
+
+When the selection is a whole epic and nothing narrowed it further, the epic
+record moves too — a partial move is a split, so the epic stays with the tickets
+left behind.
 
 ### Ticket summary
 

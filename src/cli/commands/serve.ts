@@ -637,6 +637,80 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
+  // Bulk-move a selection of tickets into another sprint (tas-vEpBfx0t).
+  //
+  // Body: {
+  //   toSprint: string | null   // null / 'none' moves the selection to Unsorted
+  //   fromSprint?: string       // source workspace, or 'none'
+  //   fromEpic?: string         // source epic, or 'none'
+  //   statuses?: TicketStatus[] // subset by status; omitted means all
+  //   ticketIds?: string[]      // explicit allowlist, intersected with the above
+  //   moveEpic?: boolean        // re-parent the epic too (default true, epic scope only)
+  //   dryRun?: boolean          // report the selection without writing
+  // }
+  //
+  // At least one of fromSprint / fromEpic / ticketIds is required — the storage
+  // layer rejects a selection-less call rather than moving the whole project.
+  // Registered before `/api/tickets/:ticketId/comments` is irrelevant (different
+  // depth), but it must not look like a ticket id, hence the `bulk/` prefix.
+  app.post('/api/tickets/bulk/move', async (req, res) => {
+    try {
+      const { toSprint, fromSprint, fromEpic, statuses, ticketIds, moveEpic, dryRun } = req.body || {};
+
+      if (toSprint !== null && typeof toSprint !== 'string') {
+        return res.status(400).json({ error: { code: 'bad_input', message: 'toSprint must be a sprint id or null' } });
+      }
+      if (statuses !== undefined) {
+        if (!Array.isArray(statuses) || statuses.some(s => !VALID_STATUSES.has(s))) {
+          return res.status(400).json({
+            error: { code: 'bad_input', message: `statuses must be an array of ${[...VALID_STATUSES].join(', ')}` },
+          });
+        }
+      }
+      if (ticketIds !== undefined && (!Array.isArray(ticketIds) || ticketIds.some(i => typeof i !== 'string'))) {
+        return res.status(400).json({ error: { code: 'bad_input', message: 'ticketIds must be an array of ticket ids' } });
+      }
+
+      // `none` is the sentinel every other ticket filter uses for "no sprint";
+      // accept it here too so a client can round-trip a filter straight into a move.
+      const target = toSprint === null || toSprint === 'none' ? null : toSprint;
+
+      const result = await storage.moveTicketsToSprint({
+        toSprint: target,
+        ...(typeof fromSprint === 'string' && fromSprint.length > 0 ? { fromSprint } : {}),
+        ...(typeof fromEpic === 'string' && fromEpic.length > 0 ? { fromEpic } : {}),
+        ...(statuses ? { statuses } : {}),
+        ...(ticketIds ? { ticketIds } : {}),
+        ...(moveEpic !== undefined ? { moveEpic: !!moveEpic } : {}),
+        ...(dryRun ? { dryRun: true } : {}),
+      });
+
+      if (!dryRun) {
+        for (const t of result.moved) {
+          broadcast(wss, { type: 'ticket_updated', data: t });
+        }
+        if (result.epic) broadcast(wss, { type: 'epic_updated', data: result.epic });
+      }
+
+      res.json({
+        movedTicketIds: result.moved.map(t => t.id),
+        moved: result.moved.length,
+        matched: result.matched,
+        alreadyThere: result.alreadyThere,
+        ungroupedTicketIds: result.ungroupedTicketIds,
+        toSprint: target,
+        ...(result.epic !== undefined ? { epic: result.epic } : {}),
+        ...(dryRun ? { dryRun: true } : {}),
+      });
+    } catch (error) {
+      // Selection guard + unknown target sprint both surface as thrown errors
+      // from storage; they're caller mistakes, not server faults.
+      const message = error instanceof Error ? error.message : 'Failed to move tickets';
+      const badInput = /selection is required|not found/i.test(message);
+      res.status(badInput ? 400 : 500).json({ error: { code: badInput ? 'bad_input' : 'move_failed', message } });
+    }
+  });
+
   app.post('/api/users', async (req, res) => {
     try {
       const { username, displayName, email, color } = req.body;
@@ -771,14 +845,20 @@ export async function startServer(args: ServeArgs): Promise<void> {
     }
   });
 
+  // `?cascade=true` (or `{ cascade: true }` in the body) deletes the sprint's
+  // epics, its tickets and those tickets' comments instead of detaching them
+  // into Unsorted. Opt-in, because it's the one irreversible delete in the app.
   app.delete('/api/sprints/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const { ok, sweptTickets, sweptEpics } = await storage.deleteSprint(id);
+      const cascade = req.query.cascade === 'true' || req.body?.cascade === true;
+      const result = await storage.deleteSprint(id, { cascade });
 
-      if (!ok) {
+      if (!result.ok) {
         return res.status(404).json({ error: 'Sprint not found' });
       }
+
+      const { sweptTickets, sweptEpics, deletedTickets, deletedEpics, deletedComments } = result;
 
       broadcast(wss, { type: 'sprint_deleted', data: { id } });
       // Epics under the sprint are detached rather than deleted — re-broadcast
@@ -786,17 +866,64 @@ export async function startServer(args: ServeArgs): Promise<void> {
       for (const e of sweptEpics) {
         broadcast(wss, { type: 'epic_updated', data: e });
       }
+      for (const e of deletedEpics) {
+        broadcast(wss, { type: 'epic_deleted', data: { id: e.id } });
+      }
+      for (const t of deletedTickets) {
+        broadcast(wss, { type: 'ticket_deleted', data: { id: t.id } });
+      }
       for (const t of sweptTickets) {
         broadcast(wss, { type: 'ticket_updated', data: t });
       }
 
       res.json({
         success: true,
+        cascade,
         sweptTicketIds: sweptTickets.map(t => t.id),
         sweptEpicIds: sweptEpics.map(e => e.id),
+        deletedTicketIds: deletedTickets.map(t => t.id),
+        deletedEpicIds: deletedEpics.map(e => e.id),
+        deletedComments,
       });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete sprint' });
+    }
+  });
+
+  // Preview what `DELETE /api/sprints/:id?cascade=true` would remove, so the UI
+  // can put real numbers in the confirm dialog rather than "this cannot be
+  // undone" in the abstract.
+  app.get('/api/sprints/:id/contents', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const sprint = (await storage.getSprints()).find(s => s.id === id);
+      if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+
+      const tickets = (await storage.getAllTickets()).filter(t => t.sprint === id);
+      const epics = (await storage.getEpics()).filter(e => e.sprint === id);
+      const commentCounts = await storage.getCommentCounts();
+      const comments = tickets.reduce((sum, t) => sum + (commentCounts[t.id] || 0), 0);
+
+      const byStatus: Record<string, number> = {};
+      for (const t of tickets) byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+
+      // Worktrees survive a delete of any kind and nothing records the path
+      // afterwards — the dialog needs to say so.
+      const worktrees = [
+        ...tickets.filter(t => t.worktree).map(t => ({ id: t.id, path: t.worktree!.path, branch: t.worktree!.branch })),
+        ...epics.filter(e => e.worktree).map(e => ({ id: e.id, path: e.worktree!.path, branch: e.worktree!.branch })),
+      ];
+
+      res.json({
+        sprint: { id: sprint.id, name: sprint.name },
+        tickets: tickets.length,
+        epics: epics.length,
+        comments,
+        byStatus,
+        worktrees,
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to read sprint contents' });
     }
   });
 
@@ -1010,6 +1137,39 @@ export async function startServer(args: ServeArgs): Promise<void> {
       });
       
       res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to process notification' });
+    }
+  });
+
+  // Bulk counterparts to the two above, for CLI operations that touch a whole
+  // sprint at once (migrate, cascade delete). Each entry is re-broadcast as the
+  // same single-row event the clients already handle.
+  app.post('/api/cli-notifications/tickets-updated', async (req, res) => {
+    try {
+      const { tickets } = req.body || {};
+      if (!Array.isArray(tickets)) {
+        return res.status(400).json({ error: 'tickets must be an array' });
+      }
+      for (const ticket of tickets) {
+        broadcast(wss, { type: 'ticket_updated', data: ticket });
+      }
+      res.json({ success: true, count: tickets.length });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to process notification' });
+    }
+  });
+
+  app.post('/api/cli-notifications/tickets-deleted', async (req, res) => {
+    try {
+      const { ids } = req.body || {};
+      if (!Array.isArray(ids)) {
+        return res.status(400).json({ error: 'ids must be an array' });
+      }
+      for (const id of ids) {
+        broadcast(wss, { type: 'ticket_deleted', data: { id } });
+      }
+      res.json({ success: true, count: ids.length });
     } catch (error) {
       res.status(500).json({ error: 'Failed to process notification' });
     }

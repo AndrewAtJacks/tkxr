@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+### Added
+- **Bulk ticket migration** (tas-vEpBfx0t). Moving work between
+  workspaces a ticket at a time doesn't survive contact with a real
+  sprint rollover, so the move is now an operation in its own right on
+  every surface:
+  - `tkxr sprint migrate <from> <to>` and
+    `tkxr epic migrate <epic-id> <sprint-id>`, both taking `--status`
+    (comma-separated, repeatable), `--tickets` and `--dry-run`. Either
+    sprint id may be `none` for the Unsorted bucket.
+  - `POST /api/tickets/bulk/move` with
+    `{ toSprint, fromSprint?, fromEpic?, statuses?, ticketIds?, moveEpic?, dryRun? }`.
+    At least one of `fromSprint`/`fromEpic`/`ticketIds` is required —
+    a selection-less call is a `400`, not a project-wide move.
+  - MCP `migrate_tickets`, with the same `dryRun` so an agent can show
+    the selection before committing to it.
+  - **SprintPanel** gained a "Move tickets to another sprint" section
+    (status chips + target picker), and **EpicPanel**'s sprint selector
+    now brings the epic's tickets along by default rather than moving
+    the epic out from under them.
+
+  Selecting a whole epic moves the epic record too; narrowing by status
+  or id makes it a split, so the epic stays with the tickets left
+  behind. An epic belongs to exactly one workspace, so a ticket that
+  moves while its epic stays put is dropped from that epic instead of
+  carrying a chip the target board's epic filter can't list — those ids
+  come back as `ungroupedTicketIds` and every surface reports them.
+- **Cascade sprint delete** (tas-nptsO5gE). `DELETE /api/sprints/:id`,
+  `tkxr delete <sprint-id>` and MCP `delete_sprint` accept
+  `cascade` / `--cascade`, deleting the sprint's epics, its tickets and
+  those tickets' comments instead of detaching them into Unsorted. The
+  default is unchanged and still non-destructive.
+
+  It is the only irreversible operation in tkxr — nothing is archived —
+  so both the CLI and the new web dialog print the exact counts
+  (`GET /api/sprints/:id/contents`) and require explicit confirmation,
+  and the dialog lists any worktrees that will be left untracked on
+  disk. Tickets in *other* sprints that belonged to a deleted epic
+  survive, minus the epic tag.
+- `POST /api/cli-notifications/tickets-updated` and `/tickets-deleted`,
+  so a CLI bulk operation broadcasts in one request rather than one per
+  ticket.
+
 ## [3.0.1] - 2026-08-03
 
 ### Fixed

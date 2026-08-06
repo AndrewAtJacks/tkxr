@@ -69,6 +69,25 @@ export class NotificationClient {
   }
 
   /**
+   * Notify server that many tickets changed at once (bulk migrate, cascade
+   * delete). One request instead of one per ticket — a whole-sprint operation
+   * is easily hundreds of rows, and each `notify` call also logs a line.
+   * No-ops on an empty list so callers don't have to guard.
+   */
+  async notifyTicketsUpdated(tickets: any[]): Promise<void> {
+    if (!tickets.length) return;
+    await this.notify('/api/cli-notifications/tickets-updated', { tickets });
+  }
+
+  /**
+   * Bulk counterpart to notifyTicketDeleted.
+   */
+  async notifyTicketsDeleted(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    await this.notify('/api/cli-notifications/tickets-deleted', { ids });
+  }
+
+  /**
    * Notify server that a sprint was created
    */
   async notifySprintCreated(sprint: any): Promise<void> {
